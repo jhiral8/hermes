@@ -1,0 +1,17 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 3010,
+  "allowed_logins": ["REPLACE-with-Craig's-Tailscale-login"],
+  "cache_seconds": 15,
+  "services": [
+    {"id": "max", "name": "Max (Hermes Agent)", "group": "Agents", "kind": "systemd", "unit": "REPLACE-hermes-unit"},
+    {"id": "paperclip", "name": "Paperclip board", "group": "Agents", "kind": "http", "url": "http://127.0.0.1:REPLACE/"},
+    {"id": "broker", "name": "Approval broker", "group": "Safety", "kind": "http", "url": "http://127.0.0.1:REPLACE/"},
+    {"id": "kill", "name": "Kill switch", "group": "Safety", "kind": "flag", "path": "REPLACE-kill-switch-flag-file", "on_text": "agents stopped", "off_text": "not pulled", "labels": {"ok": "Off", "down": "On"}},
+    {"id": "nutritrace", "name": "NutriTrace", "group": "Health", "kind": "http", "url": "http://127.0.0.1:3001/"},
+    {"id": "lifttrace", "name": "LiftTrace", "group": "Health", "kind": "http", "url": "http://127.0.0.1:3002/"},
+    {"id": "cooktrace", "name": "CookTrace", "group": "Health", "kind": "http", "url": "http://127.0.0.1:3003/"},
+    {"id": "salt", "name": "salt.md notes", "group": "Notes", "kind": "http", "url": "http://127.0.0.1:REPLACE/"},
+    {"id": "backup", "name": "Nightly backup", "group": "Safety", "kind": "file_age", "dir": "REPLACE-backup-log-dir", "glob": "*", "max_age_hours": 26}
+  ]
+}

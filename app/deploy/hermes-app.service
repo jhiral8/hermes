@@ -1,0 +1,33 @@
+[Unit]
+Description=Hermes app server (read-only PWA backend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hermes-app
+Group=hermes-app
+ExecStart=/usr/bin/python3 /opt/hermes-app/app/server/hermes_app.py --config /etc/hermes-app/config.json --web /opt/hermes-app/app/web
+Restart=on-failure
+RestartSec=5
+
+# Hardening: read-only everywhere, no privilege gain, loopback networking only.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressAllow=localhost
+IPAddressDeny=any
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
