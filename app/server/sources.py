@@ -131,9 +131,13 @@ class CostFile:
                     if len(r) < 4:
                         continue
                     try:
-                        at, prov, remaining, used = float(r[0]), r[1].strip().lower(), float(r[2]), float(r[3])
+                        at, prov, used = float(r[0]), r[1].strip().lower(), float(r[3])
                     except ValueError:
                         continue  # header or a damaged line
+                    try:
+                        remaining = float(r[2])
+                    except ValueError:
+                        remaining = None  # a key with no limit has no balance
                     if self.provider and prov != self.provider:
                         continue
                     rows.append((at, remaining, used))

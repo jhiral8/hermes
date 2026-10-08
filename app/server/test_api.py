@@ -147,13 +147,14 @@ class Sources(unittest.TestCase):
                 (now - 3 * 86400, "deepseek", 5, 9.0),       # other provider ignored
                 (now - 3600 * 2, "openrouter", 17.5, 2.5),   # today: +0.5
                 (now - 3600, "openrouter", 19.9, 0.1),       # new key: no negative spend
-                (now - 60, "openrouter", 19.8, 0.2)]         # today: +0.1
+                (now - 60, "openrouter", 19.8, 0.2),         # today: +0.1
+                (now - 30, "openrouter", "", 0.2)]           # no limit on the key: blank balance
         p.write_text("\n".join(",".join(map(str, r)) for r in rows))
         c = CostFile({"csv_path": str(p), "provider": "openrouter", "month_cap_usd": 10})
         out = c.read_csv(now=now)
         self.assertAlmostEqual(out["today_usd"], 0.6)
         self.assertAlmostEqual(out["month_usd"], 1.6)
-        self.assertEqual((out["balance_usd"], out["month_cap_usd"]), (19.8, 10))
+        self.assertEqual((out["balance_usd"], out["month_cap_usd"]), (None, 10))
         with self.assertRaises(SourceError):
             CostFile({"csv_path": d + "/none.csv"}).read()
 
