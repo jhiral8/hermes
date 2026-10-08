@@ -130,5 +130,72 @@ class Run(unittest.TestCase):
             hf.run(str(empty), None, None, str(d / "a"), str(d / "b"), today=D(2026, 10, 2))
 
 
+def make_nutritrace_db(diary=(), wellness=()):
+    """A small database with NutriTrace's table layout (names from its schema dump)."""
+    import sqlite3
+    path = Path(tempfile.mkdtemp(), "nutritrace.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE diary (id TEXT, user_id TEXT, date TEXT, items TEXT, body_stats TEXT, "
+                "deleted_at TEXT)")
+    con.execute("CREATE TABLE wellness_data (id TEXT, user_id TEXT, date TEXT, source TEXT, "
+                "metric_type TEXT, value REAL, synced_at TEXT)")
+    for row in diary:
+        con.execute("INSERT INTO diary VALUES (?, 'u', ?, ?, ?, ?)", row)
+    for row in wellness:
+        con.execute("INSERT INTO wellness_data VALUES (?, 'u', ?, 'scale', ?, ?, ?)", row)
+    con.commit()
+    con.close()
+    return path
+
+
+class NutriTraceDb(unittest.TestCase):
+    def test_reads_totals_items_and_weights(self):
+        items = json.dumps([{"name": "Oats", "nutrition": {"calories": 300}},
+                            {"name": "Milk", "nutrition": {"calories": 120.5}},
+                            {"name": "?"}])
+        p = make_nutritrace_db(
+            diary=[("a", "2026-10-02", items, None, None),
+                   ("b", "2026-10-03", json.dumps([]), json.dumps({"weight": 81.2}), None),
+                   ("c", "2026-10-04", "not json", None, None),
+                   ("d", "2026-10-05", json.dumps([{"nutrition": {"calories": 900}}]), None, "2026-10-05")],
+            wellness=[("w1", "2026-10-03", "weight", 80.9, "2026-10-03T07:00"),
+                      ("w2", "2026-10-03", "weight", 80.7, "2026-10-03T08:00"),
+                      ("w3", "2026-10-04", "steps", 9000, "2026-10-04T08:00")])
+        days, weights = hf.read_nutritrace_db(p, D(2026, 10, 1), D(2026, 10, 8))
+        self.assertEqual(days["2026-10-02"], {"kcal": 420.5, "items": 3})
+        self.assertEqual(days["2026-10-03"], {"kcal": None, "items": 0})
+        self.assertEqual(days["2026-10-04"], {"kcal": None, "items": 0})  # unreadable items: no total
+        self.assertNotIn("2026-10-05", days)  # deleted
+        self.assertEqual(weights["2026-10-03"], 80.7)  # the later sync wins over body stats
+        self.assertNotIn("2026-10-04", weights)  # steps are not weight
+
+    def test_opened_read_only(self):
+        import sqlite3
+        p = make_nutritrace_db()
+        hf.read_nutritrace_db(p, D(2026, 10, 1), D(2026, 10, 8))
+        con = sqlite3.connect(p.resolve().as_uri() + "?mode=ro", uri=True)
+        with self.assertRaises(sqlite3.OperationalError):
+            con.execute("INSERT INTO diary VALUES ('x', 'u', '2026-10-01', '[]', NULL, NULL)")
+        con.close()
+
+    def test_run_merges_database_weights_and_food_with_nutritrace_winning(self):
+        d = Path(tempfile.mkdtemp())
+        base = D(2026, 9, 28)
+        days = [(base + datetime.timedelta(days=i), 2100) for i in range(6)]  # 28 Sep to 3 Oct
+        export = make_export(days, {D(2026, 9, 28): 84.0})
+        p = make_nutritrace_db(
+            diary=[("a", "2026-10-01", json.dumps([{"nutrition": {"calories": 1500}}]), None, None)],
+            wellness=[("w", "2026-10-02", "weight", 83.4, "2026-10-02T07:00")])
+        hf.run(str(export), None, None, str(d / "days.json"), str(d / "estimator.json"),
+               today=D(2026, 10, 3), fetch=lambda *a: {}, nutritrace_db=str(p))
+        feed = {r["date"]: r for r in json.loads((d / "days.json").read_text())}
+        self.assertEqual(feed["2026-10-01"]["intake"], 1500)  # NutriTrace wins on food
+        self.assertEqual(feed["2026-10-01"]["status"], "complete")
+        self.assertEqual(feed["2026-10-02"]["weight"], 83.4)  # NutriTrace's weigh-in is used
+        self.assertEqual(feed["2026-10-02"]["intake"], 2100)  # no NutriTrace food: MacroFactor fills in
+        self.assertEqual(feed["2026-09-28"]["weight"], 84.0)
+        self.assertEqual(feed["2026-10-03"]["status"], "partial")  # today
+
+
 if __name__ == "__main__":
     unittest.main()

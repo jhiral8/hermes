@@ -8,8 +8,11 @@ MacroFactor day up to today, the feed takes:
   - NutriTrace's totals, when NutriTrace has logged anything that day (NutriTrace wins);
   - otherwise MacroFactor's total for the day, marked complete or partial as exported;
   - otherwise "missing".
-Weigh-ins come from MacroFactor. NutriTrace's read-only tokens can't read weight
-history, so new weigh-ins won't show until they can.
+Weigh-ins come from MacroFactor, and from NutriTrace on any day it has one. NutriTrace
+can be read two ways: through its API with the read-only key (food totals only, since
+the key can't read weight history), or from its database file, opened read-only
+(food totals and weigh-ins, with no key). The database way is the one the nightly
+timer uses.
 
 Then the estimator runs on that feed and writes the same small estimate file the
 app already reads. Health data stays on this server: nothing here goes to Max or a model.
@@ -24,6 +27,7 @@ Usage (nightly):
 import argparse
 import datetime
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -109,6 +113,70 @@ def build_days(history, nt_days, today):
     return out
 
 
+def _kcal_of(items):
+    """Total kcal of one day's diary items. The item layout isn't confirmed on the live
+    database yet, so this reads a per-item nutrition object and skips anything else."""
+    total, seen = 0.0, False
+    for it in items:
+        nut = it.get("nutrition") if isinstance(it, dict) else None
+        if not isinstance(nut, dict):
+            continue
+        for k in ("calories", "kcal", "energy"):
+            v = nut.get(k)
+            if isinstance(v, (int, float)):
+                total += float(v)
+                seen = True
+                break
+    return round(total, 1) if seen else None
+
+
+def _weight_of(body_stats):
+    try:
+        stats = json.loads(body_stats) if isinstance(body_stats, str) else (body_stats or {})
+    except ValueError:
+        return None
+    if not isinstance(stats, dict):
+        return None
+    for k in ("weight", "weight_kg"):
+        v = stats.get(k)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
+def read_nutritrace_db(path, start, end):
+    """NutriTrace's own daily totals and weigh-ins, read from its database file.
+
+    Opened read-only (SQLite mode=ro), so nothing is written and no key is needed.
+    Returns ({date: {"kcal", "items"}}, {date: kg}).
+    """
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    con = sqlite3.connect(uri, uri=True, timeout=5)
+    try:
+        days, weights = {}, {}
+        bounds = (start.isoformat(), end.isoformat())
+        for date, items, body_stats in con.execute(
+                "SELECT date, items, body_stats FROM diary WHERE date BETWEEN ? AND ? AND deleted_at IS NULL",
+                bounds):
+            try:
+                rows = json.loads(items) if isinstance(items, str) else (items or [])
+            except ValueError:
+                rows = []
+            rows = rows if isinstance(rows, list) else []
+            days[date] = {"kcal": _kcal_of(rows), "items": len(rows)}
+            w = _weight_of(body_stats)
+            if w is not None:
+                weights[date] = w
+        for date, value in con.execute(
+                "SELECT date, value FROM wellness_data WHERE metric_type IN ('weight', 'body_weight') "
+                "AND date BETWEEN ? AND ? ORDER BY synced_at", bounds):
+            if isinstance(value, (int, float)):
+                weights[date] = float(value)  # the later sync wins
+        return days, weights
+    finally:
+        con.close()
+
+
 def fetch_nutritrace(url, key_file, start, end, pause=1.1, sleep=time.sleep, timeout=6):
     """NutriTrace totals for each day in the range. A day that can't be read is left out."""
     app = TraceApp("NutriTrace", {"url": url, "key_file": key_file, "timeout": timeout})
@@ -128,15 +196,19 @@ def fetch_nutritrace(url, key_file, start, end, pause=1.1, sleep=time.sleep, tim
 
 
 def run(history_path, nutritrace_url, key_file, days_out, estimator_out, today=None, module_dir=None,
-        fetch=fetch_nutritrace):
-    history = load_history(history_path)
-    mf_days, _ = history
+        fetch=fetch_nutritrace, nutritrace_db=None):
+    mf_days, mf_weights = load_history(history_path)
     if not mf_days:
         raise SystemExit("The MacroFactor export has no days.")
     today = today or london_today()
     start = min(datetime.date.fromisoformat(d) for d in mf_days)
-    nt_days = fetch(nutritrace_url, key_file, start, today) if nutritrace_url else {}
-    days = build_days(history, nt_days, today)
+    if nutritrace_db:
+        nt_days, nt_weights = read_nutritrace_db(nutritrace_db, start, today)
+    else:
+        nt_days = fetch(nutritrace_url, key_file, start, today) if nutritrace_url else {}
+        nt_weights = {}
+    # NutriTrace wins on any day it has logged, for both food and weight.
+    days = build_days((mf_days, {**mf_weights, **nt_weights}), nt_days, today)
     p = Path(days_out)
     tmp = p.with_name(p.name + ".tmp")
     tmp.write_text(json.dumps(days), encoding="utf-8")
@@ -156,9 +228,11 @@ def main(argv=None):
     ap.add_argument("--days-out", required=True, help="where to write the day feed")
     ap.add_argument("--estimator-out", required=True, help="where to write the estimate the app reads")
     ap.add_argument("--module-dir", default=None, help="folder holding estimator.py (default: the app's copy)")
+    ap.add_argument("--nutritrace-db", default=None,
+                    help="NutriTrace's database file, opened read-only; used instead of the API when given")
     args = ap.parse_args(argv)
     res = run(args.history, args.nutritrace_url, args.key_file, args.days_out, args.estimator_out,
-              module_dir=args.module_dir)
+              module_dir=args.module_dir, nutritrace_db=args.nutritrace_db)
     print(f"Day feed: {res['days']} days, {res['nutritrace_days']} from NutriTrace. "
           f"Estimate held: {res['estimate'].get('held')}.")
     return 0

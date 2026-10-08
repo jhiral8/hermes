@@ -9,8 +9,7 @@ Group=hermes-app
 UMask=0027
 ExecStart=/usr/bin/python3 /opt/hermes-app/app/server/history_feed.py \
   --history /home/health/imports/macrofactor/MacroFactor-20261007134323.xlsx \
-  --nutritrace-url http://127.0.0.1:3001 \
-  --key-file /etc/hermes-app/health/nutritrace.key \
+  --nutritrace-db /home/health/health-stack/data/nutritrace/db/nutritrace.db \
   --days-out /var/lib/hermes-app/health-days.json \
   --estimator-out /var/lib/hermes-app/estimator.json
 NoNewPrivileges=yes

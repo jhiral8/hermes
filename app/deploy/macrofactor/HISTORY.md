@@ -20,10 +20,12 @@ owned by the `health` user. Newer exports replace the file path in the timer.
    and set mode 0770. The timer runs as `health` in group `hermes-app`, so it can
    write the two outputs, and the app reads them through the same group.
 
-3. **Check the key is readable by the service.** `/etc/hermes-app/health/nutritrace.key`
-   must be readable by group `hermes-app`, because the service runs as `health`
-   with group `hermes-app`. If it isn't, **stop and report**. Don't change its owner
-   or mode without saying so first.
+3. **Check the database is readable by the service.** The timer reads NutriTrace's
+   database file directly, opened read-only, as the `health` user, who owns it. No
+   key is used. Check that `health` can read the file. If it can't, **stop and
+   report**. Don't change its owner or mode without saying so first.
+   The service runs as `health` with group `hermes-app`, so it also reads the
+   export. Neither file is written to.
 
 4. **Install the timer.** Copy `hermes-history.service` and `hermes-history.timer`
    from this folder to `/etc/systemd/system/`, then `systemctl daemon-reload` and
