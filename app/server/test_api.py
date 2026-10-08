@@ -68,6 +68,7 @@ class PaperclipClient(unittest.TestCase):
         self.assertTrue(issues[0]["needs_you"])
         self.assertTrue(issues[0]["running"])
         self.assertEqual(op.calls[0][3]["Authorization"], "Bearer pcp_board_x")
+        self.assertIn("sortField=updated&", op.calls[1][1])  # this Paperclip refuses updatedAt
 
     def test_writes_send_the_right_calls(self):
         pc, op = self.make({

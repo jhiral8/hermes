@@ -129,7 +129,7 @@ class Paperclip:
         return out
 
     def issues(self, limit=100):
-        body = self._call("GET", self._co(f"/issues?limit={int(limit)}&sortField=updatedAt&sortDir=desc"))
+        body = self._call("GET", self._co(f"/issues?limit={int(limit)}&sortField=updated&sortDir=desc"))
         out = []
         for i in _as_list(body, "issues"):
             run = i.get("activeRun") or {}
@@ -145,7 +145,7 @@ class Paperclip:
                 "needs_you": bool(i.get("assigneeUserId")) or i.get("status") == "in_review",
                 "running": bool(run) and run.get("status") in ("running", "queued"),
                 "run_id": run.get("id") if run else None,
-                "updated": i.get("updatedAt"),
+                "updated": i.get("updatedAt") or i.get("lastActivityAt"),
             })
         return out
 

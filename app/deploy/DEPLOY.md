@@ -87,11 +87,9 @@ action is logged to `/var/lib/hermes-app/actions.log`.
 5. Cost: the app reads `/var/lib/hermes-cost/balance.csv` (provider
    `openrouter`; spend is the rise in `used` between checks). Set
    `month_cap_usd` to `monthly_budget_usd` from `/etc/hermes-cost/config.json`.
-   The folder is root 0700, so give hermes-app read on that one file and
-   traverse on the folder (`setfacl -m u:hermes-app:x /var/lib/hermes-cost`,
-   `setfacl -m u:hermes-app:r /var/lib/hermes-cost/balance.csv`); it holds only
-   balances. Check the cost script rewrites the file in place (append) so the
-   ACL survives; if it replaces the file, use a default ACL on the folder.
+   The CSV is already 644 but its folder is root 0700. Needs Craig's OK:
+   `sudo chmod 0711 /var/lib/hermes-cost` (traverse only: nobody can list the
+   folder, and alerts.json stays unreadable unless it is itself world-readable).
 6. Backup tile: kind `last_run` on `hermes-backup.service`. It asks
    `systemctl show` for the last run's result and time; no new permissions.
 7. `sudo systemctl restart hermes-app` and check `/api/today` with the login
