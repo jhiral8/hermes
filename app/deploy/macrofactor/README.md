@@ -1,3 +1,7 @@
+> **Superseded.** Don't follow these steps. The import needs a NutriTrace write key
+> and a NutriTrace setting change, and Craig chose to read the MacroFactor export
+> directly instead. The steps are in HISTORY.md.
+
 # Import the MacroFactor export into NutriTrace
 
 Loads Craig's MacroFactor export into NutriTrace: one daily-total food entry per

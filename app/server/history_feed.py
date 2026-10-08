@@ -17,8 +17,8 @@ app already reads. Health data stays on this server: nothing here goes to Max or
 Usage (nightly):
   python3 history_feed.py --history /home/health/imports/macrofactor/MacroFactor-20261007134323.xlsx \
       --nutritrace-url http://127.0.0.1:3001 --key-file /etc/hermes-app/health/nutritrace.key \
-      --days-out /var/lib/hermes-app-feed/health-days.json \
-      --estimator-out /var/lib/hermes-app-feed/estimator.json
+      --days-out /var/lib/hermes-app/health-days.json \
+      --estimator-out /var/lib/hermes-app/estimator.json
 """
 
 import argparse

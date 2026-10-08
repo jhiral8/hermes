@@ -217,19 +217,12 @@ sending from the test mailbox only.
 Mail is never written to disk or cached; the browser keeps it in memory only,
 and the browser never stores it in localStorage.
 
-## Phase 4 tiles: Expenditure and weight (needs the day feed)
+## Phase 4 tiles: Expenditure and weight (day feed from the MacroFactor export)
 
-The Expenditure and weight tiles read `/var/lib/hermes-app-feed/estimator.json`,
-written by `app/server/estimate_feed.py` from a day feed at
-`/var/lib/hermes-app-feed/health-days.json` (estimator format: one record per
-day with `date`, `intake`, `status`, `weight`). Only the summary leaves the
-script, so the file holds no food names.
-
-1. Build the day feed from NutriTrace's own data (schema pending the read-only dump).
-2. Run: `python3 estimate_feed.py --days health-days.json --module-dir /mnt/project-files/health/estimator --out /var/lib/hermes-app-feed/estimator.json`
-3. Schedule it nightly after the feed is written.
-
-Until those files exist, both tiles say "not available yet".
+The steps are in `app/deploy/macrofactor/HISTORY.md`. The tiles read
+`/var/lib/hermes-app/estimator.json`, which `history_feed.py` writes nightly from
+the MacroFactor export and NutriTrace's read-only totals. The old import steps in
+`app/deploy/macrofactor/README.md` are superseded and must not be followed.
 
 ## Salt: delete blocker and Team notebook (agents write, nobody deletes)
 
