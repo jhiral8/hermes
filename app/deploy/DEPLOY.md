@@ -261,7 +261,7 @@ Nothing here goes to Max or any model.
    It is switched on only after Craig's explicit yes. When on, the server calls
    `world.openfoodfacts.org` with no key, caches answers for a day, and allows
    one call a second. That is the only new outside access.
-2. Saved foods are kept in `/var/lib/hermes-app-feed/saved-foods.json` (mode 0640),
+2. Saved foods are kept in `/var/lib/hermes-app/saved-foods.json` (mode 0640),
    written by the app's own user. They are not in NutriTrace: this NutriTrace
    version (1.3.1) has no key route that can create a food, and the current
    read key can't list them either. Nothing needs a new key.

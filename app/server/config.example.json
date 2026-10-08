@@ -129,6 +129,6 @@
   "foods": {
     "off_enabled": false,
     "timeout": 6,
-    "store_path": "/var/lib/hermes-app-feed/saved-foods.json"
+    "store_path": "/var/lib/hermes-app/saved-foods.json"
   }
 }
