@@ -142,10 +142,10 @@ def _weight_of(body_stats):
         return None
     if not isinstance(stats, dict):
         return None
-    v = stats.get("weight")
-    if not isinstance(v, (int, float)):
+    v = _num(stats.get("weight"))  # a numeric string counts too, as NutriTrace's reader allows
+    if v is None:
         return None
-    return float(v) * LB_TO_KG if stats.get("weight_unit") == "lb" else float(v)
+    return v * LB_TO_KG if stats.get("weight_unit") == "lb" else v
 
 
 def read_nutritrace_db(path, start, end):

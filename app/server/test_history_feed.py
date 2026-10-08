@@ -175,6 +175,8 @@ class NutriTraceDb(unittest.TestCase):
         self.assertAlmostEqual(hf._weight_of(json.dumps({"weight": 180, "weight_unit": "lb"})), 81.646, places=2)
         self.assertEqual(hf._weight_of(json.dumps({"weight": 81.2, "weight_unit": "kg"})), 81.2)
         self.assertEqual(hf._weight_of(json.dumps({"weight": 81.2})), 81.2)  # kg is the default
+        self.assertEqual(hf._weight_of(json.dumps({"weight": "81.2"})), 81.2)  # numeric string
+        self.assertIsNone(hf._weight_of(json.dumps({"weight": "heavy"})))
 
     def test_opened_read_only(self):
         import sqlite3
