@@ -2,6 +2,7 @@ import io
 import json
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -154,6 +155,7 @@ class Chat(unittest.TestCase):
         s = ChatStore(tempfile.mkdtemp())
         a = s.new()
         b = s.new()
+        time.sleep(0.01)  # timestamps are to the millisecond
         b["messages"].append({"role": "me", "text": "x"})
         s.save(b)
         self.assertEqual(s.list()[0]["id"], b["id"])
