@@ -30,13 +30,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from api import ActionError, App
+from sources import SourceError
 from artifacts import ArtifactError, Artifacts
 from chat import ChatError, DemoMax, MaxChat
 from demo import Demo
 from health import Health
 import demo_health
+from inbox import Gmail, SampleMail
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 STREAMED = object()  # a handler already wrote the response
 HERE = Path(__file__).resolve().parent
 DEFAULT_WEB = HERE.parent / "web"
@@ -260,11 +262,19 @@ def make_health(cfg, app):
     return Health(hc) if hc else None
 
 
+def make_inbox(cfg, app):
+    """Craig's real Gmail, read-only, if signed in (sample mail in sample-data mode)."""
+    if app.demo:
+        return SampleMail()
+    ic = cfg.get("inbox")
+    return Gmail(ic) if ic else None
+
+
 def _today_london():
     return Health({}).today()
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None):
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -275,6 +285,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         chat = make_chat(cfg, app, artifacts)
     if health is None:
         health = make_health(cfg, app)
+    if inbox is None:
+        inbox = make_inbox(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -340,6 +352,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._artifact_get(path[len("/api/artifacts"):].strip("/"))
             elif path == "/api/chat" or path.startswith("/api/chat/"):
                 self._chat_get(path[len("/api/chat"):].strip("/"))
+            elif path == "/api/inbox" or path.startswith("/api/inbox/"):
+                self._inbox_get(path[len("/api/inbox"):].strip("/"))
             elif path.startswith("/api/health/"):
                 self._health_get(path[len("/api/health/"):])
             elif path in get_routes:
@@ -433,6 +447,25 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     self._json(404, {"error": "not found"})
             except ChatError as e:
                 self._json(e.code, {"ok": False, "error": str(e), **app.meta()})
+
+        def _inbox_get(self, rest):
+            if inbox is None:
+                self._json(503, {"ok": False, "error": "Gmail isn't signed in on the server yet.", **app.meta()})
+                return
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                if not rest:
+                    out = inbox.list(view=(q.get("view") or ["inbox"])[0], page=(q.get("page") or [None])[0])
+                elif SAFE_ID.fullmatch(rest):
+                    out = inbox.read(rest)
+                else:
+                    self._json(400, {"error": "Bad id."})
+                    return
+            except SourceError as e:
+                self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                return
+            # Mail is never written to disk or cached; the browser keeps it in memory.
+            self._json(200, {"ok": True, **out, **app.meta()})
 
         def _health_get(self, what):
             if health is None:
@@ -545,7 +578,7 @@ def main(argv=None):
     artifacts = make_artifacts(cfg, app)
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
                               make_handler(cfg, args.web, cache, app, make_chat(cfg, app, artifacts), artifacts,
-                                           make_health(cfg, app)))
+                                           make_health(cfg, app), make_inbox(cfg, app)))
     print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
           f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()

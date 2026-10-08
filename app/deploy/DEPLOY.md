@@ -195,3 +195,24 @@ Max or any model, and nothing is logged from the app yet.
 Test: open Health in the app. Food shows today's diary from NutriTrace; a
 bad token shows "refused the token" on the screen that needs it, and the
 rest still loads.
+
+## Phase 5: Inbox (real Gmail, read-only)
+
+Craig's own mail, shown only to him in the app. Read-only: the app calls
+Gmail's read endpoints and nothing else. Nothing here can send, label, move or
+delete mail, and nothing goes to Max or any model. The approval broker keeps
+sending from the test mailbox only.
+
+1. Sign in once with the `gmail.readonly` scope only, using the existing
+   hermes-broker Google project. Save a JSON file at
+   `/etc/hermes-app/inbox/gmail-real.token` with keys `client_id`,
+   `client_secret` and `refresh_token`. Owner root, group hermes-app, mode 0640.
+2. Max's sandbox must not be able to read `/etc/hermes-app/inbox`. Check from
+   inside the sandbox, then remove the test file.
+3. Add the `inbox` block from `config.example.json` to the live config, restart
+   hermes-app only.
+4. Test: `GET /api/inbox` with the login header returns the newest messages.
+   With no token file, it says "Gmail sign-in isn't set up yet".
+
+Mail is never written to disk or cached; the browser keeps it in memory only,
+and the browser never stores it in localStorage.

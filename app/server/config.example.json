@@ -121,5 +121,9 @@
     },
     "estimator_file": "/var/lib/hermes-app-feed/estimator.json",
     "timezone": "Europe/London"
+  },
+  "inbox": {
+    "token_file": "/etc/hermes-app/inbox/gmail-real.token",
+    "timeout": 8
   }
 }

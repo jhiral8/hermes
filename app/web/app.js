@@ -101,7 +101,7 @@ function toast(msg) {
 const NAV = [
   { h: "today", i: "today", t: "Today" },
   { h: "health/food", i: "health", t: "Health" },
-  { h: "soon/inbox", i: "inbox", t: "Inbox", soon: 5 },
+  { h: "inbox", i: "inbox", t: "Inbox" },
   { h: "soon/planner", i: "planner", t: "Planner", soon: 5 },
   { label: "Assistant & agents" },
   { h: "max", i: "max", t: "Max" },
@@ -136,7 +136,7 @@ function renderShell(route) {
     }).join("")}</nav>
     <div class="side-foot"><div class="acct"><span class="avatar">${esc(initials(me.name || "Craig"))}</span><span class="who"><b style="display:block;font-size:13.5px;font-weight:600">${esc((me.name || "Craig").split(" ")[0])}</b><span class="xs muted">Owner · ${esc(me.login || "signed in through Tailscale")}</span></span></div></div>`;
 
-  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", more: "More", soon: "Coming next" }[area] || "Hermes";
+  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", more: "More", soon: "Coming next" }[area] || "Hermes";
   $("#top").innerHTML = `
     <a href="#today" class="phone-only" aria-label="Hermes home" style="display:flex">${logoMark(26)}</a>
     <div class="crumb"><span class="cur">${esc(title)}</span></div>
@@ -1032,6 +1032,42 @@ async function screenProgress(n) {
     ${hNotice(d.goals, "The goals")}</div>`;
 }
 
+/* ---------- Inbox (Phase 5): Craig's own mail, read-only ----------
+   Shown only to Craig. Mail is kept in memory, never in localStorage, and
+   nothing here goes to Max or any model. */
+
+async function inboxApi(path) {
+  try {
+    return await api(path);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function screenInbox(rest) {
+  const head = () => `<div class="ph"><div class="ph-t"><h1>Inbox</h1><p class="sub">Your mail, shown to you only. It never goes to Max or any model.</p></div></div>`;
+  if (rest[0] === "m" && rest[1]) {
+    const m = await inboxApi(`/api/inbox/${encodeURIComponent(rest[1])}`);
+    const back = `<a class="btn ghost sm" href="#inbox${S.inboxView === "unread" ? "/unread" : ""}">${ic("back", 14)}Back</a>`;
+    if (!m.ok) return head() + `<div class="btns">${back}</div>` + notConnected("Gmail", m.error);
+    return head() + `<div class="btns" style="margin-bottom:12px">${back}</div>
+      <section class="panel"><h2 style="margin-bottom:6px">${esc(m.subject)}</h2>
+      <p class="small muted" style="margin-bottom:12px">From ${esc(m.from)}${m.date ? " · " + esc(when(m.date)) : ""}</p>
+      ${m.files && m.files.length ? `<p class="xs muted" style="margin-bottom:12px">Attachments (not opened here): ${m.files.map(esc).join(", ")}</p>` : ""}
+      <div style="white-space:pre-wrap;line-height:1.6;overflow-wrap:anywhere">${esc(m.text || "(no text part)")}</div></section>`;
+  }
+  const view = rest[0] === "unread" ? "unread" : "inbox";
+  S.inboxView = view;
+  const d = await inboxApi(`/api/inbox?view=${view}`);
+  const tabs = `<nav class="tabs" aria-label="Inbox views"><a href="#inbox"${view === "inbox" ? ' aria-current="page"' : ""}>All</a><a href="#inbox/unread"${view === "unread" ? ' aria-current="page"' : ""}>Unread</a></nav>`;
+  if (!d.ok) return head() + tabs + notConnected("Gmail", d.error);
+  const rows = d.messages.map((m) => `<a class="li" href="#inbox/m/${esc(m.id)}">
+      <span class="main"><span class="t">${m.unread ? "<b>" : ""}${esc(m.subject)}${m.unread ? "</b>" : ""}</span>
+      <span class="s">${esc(m.from)} · ${esc(m.snippet)}</span></span>
+      <span class="end small muted">${m.date ? esc(when(m.date)) : ""}</span></a>`).join("");
+  return head() + tabs + `<section class="panel"><div class="list">${rows || `<p class="small muted">Nothing here.</p>`}</div></section>`;
+}
+
 /* ---------- router ---------- */
 
 let renderSeq = 0;
@@ -1051,6 +1087,7 @@ async function render() {
   else if (area === "more") html = screenMore();
   else if (area === "soon") html = screenSoon(rest[0]);
   else if (area === "health") html = await screenHealth(rest);
+  else if (area === "inbox") html = await screenInbox(rest);
   else html = await screenToday();
   if (seq !== renderSeq) return; // a newer render started
   if (!S.cache.approvals && area !== "approvals") load("approvals", "/api/approvals").then(() => renderShell(route));
