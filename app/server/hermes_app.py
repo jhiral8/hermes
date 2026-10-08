@@ -38,7 +38,7 @@ from health import Health
 import demo_health
 from inbox import Gmail, SampleMail
 import foods as food_lookup
-from foods import Catalogue, Foods, Lookup
+from foods import Foods, Lookup, SavedFoods
 
 VERSION = "0.6.0"
 STREAMED = object()  # a handler already wrote the response
@@ -279,9 +279,7 @@ def make_foods(cfg, app):
     fc = cfg.get("foods")
     if not fc:
         return None
-    hc = (cfg.get("health") or {}).get("nutritrace")
-    cat = Catalogue({**hc, **(fc.get("nutritrace") or {})}) if hc else None
-    return Foods(Lookup(fc), cat)
+    return Foods(Lookup(fc), SavedFoods(fc.get("store_path")))
 
 
 def _today_london():

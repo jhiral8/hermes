@@ -260,14 +260,12 @@ Nothing here goes to Max or any model.
 1. Open Food Facts lookup is off by default (`foods.off_enabled` in the config).
    It is switched on only after Craig's explicit yes. When on, the server calls
    `world.openfoodfacts.org` with no key, caches answers for a day, and allows
-   one call a second. Egress for that is the only new outside access.
-2. Saving to NutriTrace needs a write-scoped key, separate from the read-only
-   key: `/etc/hermes-app/health/nutritrace-write.key`, owner root, group
-   hermes-app, mode 0640. Phase-one mints it server-side. Craig is not asked for it.
-3. Saving stays off (`foods.nutritrace.save_enabled` false) until NutriTrace's
-   saved-foods endpoints are confirmed against its schema. Set
-   `foods_list_path`, `foods_create_path` and `save_enabled` together, after that
-   check. Until then "Saved foods" and "Save food" say they aren't connected yet.
-4. Test: `GET /api/health/barcode/<code>` with the login header returns the
+   one call a second. That is the only new outside access.
+2. Saved foods are kept in `/var/lib/hermes-app-feed/saved-foods.json` (mode 0640),
+   written by the app's own user. They are not in NutriTrace: this NutriTrace
+   version (1.3.1) has no key route that can create a food, and the current
+   read key can't list them either. Nothing needs a new key.
+3. Test: `GET /api/health/barcode/<code>` with the login header returns the
    product (with lookup on), or says "Barcode lookup is off" (with lookup off).
-   `POST /api/health/foods` without the X-Hermes-Action header is refused.
+   Saving a food with `POST /api/health/foods` adds it to the file; a second
+   `GET /api/health/foods` lists it. `POST` without the X-Hermes-Action header is refused.

@@ -675,7 +675,7 @@ async function act(name, arg, el) {
     if (name === "foodSave") {
       busy(true);
       const r = await api("/api/health/foods", { body: foodFromForm() });
-      toast(`Saved ${r.result && r.result.name ? r.result.name : "the food"} to NutriTrace.`);
+      toast(`Saved ${r.result && r.result.name ? r.result.name : "the food"} to your saved foods.`);
       location.hash = "#health/saved";
       return;
     }
@@ -1058,7 +1058,7 @@ async function screenSaved() {
   try { d = await api("/api/health/foods"); } catch (e) { err = e.message; }
   const items = d && d.items ? d.items : [];
   return healthHead("food", "Saved foods", `<a class="btn primary" href="#health/draft/manual">New food</a><a class="btn" href="#health/scan">Scan a barcode</a>`,
-      "Foods you've saved to NutriTrace's catalogue.") + `
+      "Kept on this server. They aren't in NutriTrace yet, because it has no way to add foods from outside.") + `
     <div class="stack s24">
       ${err ? notConnected("Saved foods", err) : ""}
       ${!err && !items.length ? `<div class="empty"><h3>No saved foods yet</h3><p>Scan a barcode or enter a food by hand, and save it here.</p></div>` : ""}

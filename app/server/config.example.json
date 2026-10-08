@@ -129,11 +129,6 @@
   "foods": {
     "off_enabled": false,
     "timeout": 6,
-    "nutritrace": {
-      "write_key_file": "/etc/hermes-app/health/nutritrace-write.key",
-      "foods_list_path": null,
-      "foods_create_path": null,
-      "save_enabled": false
-    }
+    "store_path": "/var/lib/hermes-app-feed/saved-foods.json"
   }
 }

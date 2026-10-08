@@ -10,7 +10,7 @@ from pathlib import Path
 
 import hermes_app as h
 from api import App
-from foods import Catalogue, Foods, Lookup, check_food, sample_opener, SAMPLE_CODE
+from foods import Foods, Lookup, SavedFoods, check_food, sample_opener, SAMPLE_CODE
 from sources import SourceError
 
 LOGIN = "craig@example.com"
@@ -128,9 +128,8 @@ class Barcodes(unittest.TestCase):
 
 
 class Saving(unittest.TestCase):
-    def cfg(self, **extra):
-        return {"url": "http://nutritrace.test", "key_file": key("nu_read"), "write_key_file": key("nu_write"),
-                "foods_list_path": "/foods", "foods_create_path": "/foods", **extra}
+    def store(self):
+        return SavedFoods(Path(tempfile.mkdtemp(), "saved-foods.json"))
 
     def test_check_food_keeps_unknowns_and_refuses_nonsense(self):
         f = check_food({"name": " Oat drink ", "per100": {"kcal": "46", "protein": ""}, "per_serving": {}})
@@ -147,44 +146,40 @@ class Saving(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_food({"name": "x", "per100": {"kcal": "lots"}})
 
-    def test_save_is_off_until_endpoints_are_confirmed(self):
-        fake = Fake(b"{}")
-        c = Catalogue(self.cfg(save_enabled=False), opener=fake)
+    def test_save_then_list_newest_first_and_survives_a_restart(self):
+        path = Path(tempfile.mkdtemp(), "saved-foods.json")
+        s = SavedFoods(path)
+        s.add({"name": "Oat drink", "per100": {"kcal": 46}})
+        s.add({"name": "Rice", "per_serving": {"kcal": 200}})
+        self.assertEqual([x["name"] for x in SavedFoods(path).list()], ["Rice", "Oat drink"])
+        self.assertIsNone(SavedFoods(path).list()[1]["per100"]["protein"])  # unknown stays unknown
+        self.assertEqual(oct(path.stat().st_mode & 0o777), "0o640")
+
+    def test_bad_input_is_refused_and_nothing_is_written(self):
+        s = self.store()
+        with self.assertRaises(ValueError):
+            s.add({"name": ""})
+        self.assertEqual(s.list(), [])
+        self.assertFalse(s.path.exists())
+
+    def test_unreadable_file_says_so(self):
+        path = Path(tempfile.mkdtemp(), "saved-foods.json")
+        path.write_text("not json")
         with self.assertRaises(SourceError) as e:
-            c.save({"name": "Oat drink"})
-        self.assertIn("isn't switched on", str(e.exception))
-        self.assertEqual(fake.calls, [])
+            SavedFoods(path).list()
+        self.assertIn("can't be read", str(e.exception))
 
-    def test_save_uses_the_write_key_and_names_nutrition_the_trace_way(self):
-        fake = Fake(json.dumps({"id": "f1"}).encode())
-        c = Catalogue(self.cfg(save_enabled=True), opener=fake)
-        out = c.save({"name": "Oat drink", "per100": {"kcal": 46, "protein": 1}})
-        self.assertEqual(out, {"saved": True, "id": "f1", "name": "Oat drink"})
-        method, url, auth, _, data = fake.calls[0]
-        self.assertEqual((method, url), ("POST", "http://nutritrace.test/api/v1/foods"))
-        self.assertEqual(auth, "Bearer nu_write")
-        sent = json.loads(data)
-        self.assertEqual(sent["per_100g"], {"calories": 46.0, "proteins": 1.0})
-        self.assertNotIn("carbohydrates", sent["per_100g"])  # unknown is left out, not sent as 0
-
-    def test_list_uses_the_read_key(self):
-        fake = Fake(json.dumps({"items": [{"id": "f1", "name": "Oat drink", "per_serving": {"calories": 115}}]}).encode())
-        out = Catalogue(self.cfg(), opener=fake).saved()
-        self.assertEqual(fake.calls[0][2], "Bearer nu_read")
-        self.assertEqual(out[0]["per_serving"]["kcal"], 115)
-        self.assertIsNone(out[0]["per_serving"]["fat"])
-
-    def test_no_list_path_says_not_connected(self):
+    def test_unwritable_location_refuses_cleanly(self):
+        s = SavedFoods(Path("/nonexistent-dir/saved-foods.json"))
         with self.assertRaises(SourceError) as e:
-            Catalogue({"url": "http://x", "key_file": key("k")}, opener=Fake()).saved()
-        self.assertIn("aren't connected", str(e.exception))
+            s.add({"name": "Oat"})
+        self.assertIn("Couldn't save", str(e.exception))
+        self.assertEqual(s.list(), [])  # the failed add is rolled back
 
-    def test_save_refuses_bad_keys_clearly(self):
-        c = Catalogue(self.cfg(save_enabled=True), opener=Fake(fail=403))
-        with self.assertRaises(SourceError) as e:
-            c.save({"name": "Oat"})
-        self.assertEqual(str(e.exception), "NutriTrace key lacks the scope")
-        self.assertNotIn("nu_write", str(e.exception))
+    def test_in_memory_store_with_no_path(self):
+        s = SavedFoods()
+        s.add({"name": "Oat"})
+        self.assertEqual(len(s.list()), 1)
 
 
 class Http(unittest.TestCase):
@@ -231,16 +226,13 @@ class Http(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertIn("off", body["error"])
 
-    def test_saved_list_and_save_not_connected(self):
-        base = self.serve(Foods(Lookup({"off_enabled": True}, opener=sample_opener)))
+    def test_saved_list_and_save_not_connected_when_foods_is_off(self):
+        base = self.serve(None)
         self.assertEqual(self.call(base, "/api/health/foods")[0], 503)
         self.assertEqual(self.call(base, "/api/health/foods", {"name": "Oat"})[0], 503)
 
     def test_save_needs_the_app_header_and_checks_input(self):
-        fake = Fake(json.dumps({"id": "f2"}).encode())
-        cat = Catalogue({"url": "http://nt.test", "key_file": key("r"), "write_key_file": key("w"),
-                         "foods_create_path": "/foods", "save_enabled": True}, opener=fake)
-        base = self.serve(Foods(Lookup({}), cat))
+        base = self.serve(Foods(Lookup({}), SavedFoods()))
         self.assertEqual(self.call(base, "/api/health/foods", {"name": "Oat"}, action=False)[0], 403)
         self.assertEqual(self.call(base, "/api/health/foods", {"name": ""})[0], 400)
         status, body = self.call(base, "/api/health/foods", {"name": "Oat", "per100": {"kcal": 46}})

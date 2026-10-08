@@ -2,9 +2,9 @@
 
 Lookup asks Open Food Facts from the server only, and only once Craig has said
 yes (config foods.off_enabled). Answers are cached in memory for a day, and
-calls are spaced at least a second apart. Saving writes a food to NutriTrace's
-catalogue with a write-scoped key that is separate from the read-only key.
-Saving stays off until the NutriTrace endpoints are confirmed (foods.save_enabled).
+calls are spaced at least a second apart. Saved foods are kept in a small file on
+this server (foods.store_path), because this NutriTrace version has no key route
+to create a food.
 
 Nothing here is passed to Max or any model. Unknown nutrients stay None, never 0.
 """
@@ -13,6 +13,7 @@ import datetime
 import io
 import json
 import re
+import secrets
 import threading
 import time
 import urllib.error
@@ -29,7 +30,6 @@ CODE = re.compile(r"\d{8,14}")  # EAN-8, UPC-A, EAN-13, GTIN-14
 NUTS = ("kcal", "protein", "carbs", "fat", "fibre")
 # Open Food Facts field stems, and the names NutriTrace's catalogue uses.
 OFF_STEM = {"kcal": "energy-kcal", "protein": "proteins", "carbs": "carbohydrates", "fat": "fat", "fibre": "fiber"}
-TRACE_NAME = {"kcal": "calories", "protein": "proteins", "carbs": "carbohydrates", "fat": "fat", "fibre": "fiber"}
 MAX_KCAL = 2000  # per 100 g or per serving; anything above is a typo
 MAX_G = 100      # protein, carbs, fat, fibre per 100 g
 
@@ -145,98 +145,72 @@ def check_food(body):
     }
 
 
-def _trace_nutrition(nut):
-    return {TRACE_NAME[k]: v for k, v in nut.items() if v is not None}
+class SavedFoods:
+    """Foods Craig has saved. Kept in a small JSON file on this server, or in memory with no path.
 
+    This NutriTrace version has no key route that can create a food, so the list
+    lives here for now. It holds only what Craig typed or looked up. Nothing here
+    goes to Max or any model.
+    """
 
-class Catalogue:
-    """Saved foods in NutriTrace. Reads use the read-only key; saving uses the write key."""
+    def __init__(self, path=None):
+        self.path = Path(path) if path else None
+        self._lock = threading.Lock()
+        self._items = None
 
-    def __init__(self, cfg, opener=None):
-        self.base = cfg["url"].rstrip("/") + "/api/v1"
-        self.read_key_file = cfg.get("key_file")
-        self.write_key_file = cfg.get("write_key_file")
-        self.list_path = cfg.get("foods_list_path")      # confirmed against NutriTrace's schema before use
-        self.create_path = cfg.get("foods_create_path")  # confirmed against NutriTrace's schema before use
-        self.save_enabled = bool(cfg.get("save_enabled"))
-        self.timeout = float(cfg.get("timeout", 6))
-        self._open = opener or urllib.request.urlopen
+    def _load(self):
+        if self._items is None:
+            if self.path is None or not self.path.exists():
+                self._items = []
+            else:
+                try:
+                    self._items = json.loads(self.path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    raise SourceError("The saved foods file can't be read.")
+        return self._items
 
-    def _key(self, path):
-        try:
-            return Path(path).read_text(encoding="utf-8").strip()
-        except (OSError, TypeError):
-            raise SourceError("NutriTrace key isn't readable")
+    def _write(self):
+        if self.path is None:
+            return
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(json.dumps(self._items, indent=1), encoding="utf-8")
+        tmp.chmod(0o640)
+        tmp.replace(self.path)
 
-    def _call(self, method, path, key_file, body=None):
-        data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.base + path, data=data, method=method, headers={
-            "Authorization": "Bearer " + self._key(key_file), "Accept": "application/json",
-            "User-Agent": "hermes-app", **({"Content-Type": "application/json"} if data else {})})
-        try:
-            with self._open(req, timeout=self.timeout) as r:
-                return json.loads(r.read() or b"null")
-        except urllib.error.HTTPError as e:
-            why = {401: "refused the key", 403: "key lacks the scope", 404: "public API not enabled",
-                   429: "rate limited"}.get(e.code, f"answered {e.code}")
-            raise SourceError(f"NutriTrace {why}")
-        except (urllib.error.URLError, OSError):
-            raise SourceError("NutriTrace is unreachable")
-        except ValueError:
-            raise SourceError("NutriTrace sent something that isn't JSON")
+    def list(self):
+        with self._lock:
+            return [dict(x) for x in self._load()]
 
-    def saved(self):
-        if not self.list_path:
-            raise SourceError("Saved foods aren't connected to NutriTrace yet.")
-        r = self._call("GET", self.list_path, self.read_key_file) or {}
-        items = r.get("items") or r.get("foods") or []
-        return [{"id": x.get("id"), "name": x.get("name") or "?", "brand": x.get("brand"),
-                 "serving": x.get("serving") or x.get("serving_size"),
-                 "per_serving": _nutriments_from_trace(x.get("per_serving") or x.get("nutrition") or {}),
-                 "source": x.get("source"), "retrieved": x.get("retrieved")} for x in items[:200]]
-
-    def save(self, body):
+    def add(self, body):
         food = check_food(body)
-        if not self.save_enabled or not self.create_path:
-            raise SourceError("Saving to NutriTrace isn't switched on yet. The food is kept on this screen.")
-        payload = {"name": food["name"], "brand": food["brand"] or None, "serving": food["serving"] or None,
-                   "source": food["source"], "retrieved": food["retrieved"],
-                   "per_100g": _trace_nutrition(food["per100"]), "per_serving": _trace_nutrition(food["per_serving"])}
-        r = self._call("POST", self.create_path, self.write_key_file, payload)
-        return {"saved": True, "id": (r or {}).get("id") if isinstance(r, dict) else None, "name": food["name"]}
-
-
-def _nutriments_from_trace(n):
-    out = {}
-    for k in NUTS:
-        v = None
-        for key in (TRACE_NAME[k], k):
-            v = _num(n.get(key)) if isinstance(n, dict) else None
-            if v is not None:
-                break
-        out[k] = v
-    return out
+        with self._lock:
+            items = self._load()
+            item = {"id": secrets.token_hex(8), "saved": datetime.date.today().isoformat(), **food}
+            items.insert(0, item)
+            del items[500:]  # keep the list bounded
+            try:
+                self._write()
+            except OSError:
+                items.pop(0)
+                raise SourceError("Couldn't save the food on the server.")
+        return item
 
 
 class Foods:
     """What the Food screen's barcode and saved-foods routes call."""
 
-    def __init__(self, lookup, catalogue=None):
+    def __init__(self, lookup, saved=None):
         self.lookup = lookup
-        self.catalogue = catalogue
+        self.saved_foods = saved or SavedFoods()
 
     def product(self, code):
         return {"product": self.lookup.product(code)}
 
     def saved(self):
-        if self.catalogue is None:
-            raise SourceError("Saved foods aren't connected to NutriTrace yet.")
-        return {"items": self.catalogue.saved()}
+        return {"items": self.saved_foods.list()}
 
     def save(self, body):
-        if self.catalogue is None:
-            raise SourceError("Saved foods aren't connected to NutriTrace yet.")
-        return {"result": self.catalogue.save(body)}
+        return {"result": self.saved_foods.add(body)}
 
 
 SAMPLE_CODE = "5000000000017"  # made-up code for sample-data mode
