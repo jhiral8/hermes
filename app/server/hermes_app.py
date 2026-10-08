@@ -19,6 +19,7 @@ import mimetypes
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -28,9 +29,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from api import ActionError, App
+from chat import ChatError, DemoMax, MaxChat
 from demo import Demo
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
+STREAMED = object()  # a handler already wrote the response
 HERE = Path(__file__).resolve().parent
 DEFAULT_WEB = HERE.parent / "web"
 
@@ -217,11 +220,24 @@ MAX_BODY = 16 * 1024
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 
 
-def make_handler(cfg, web_root, cache, app=None):
+def make_chat(cfg, app):
+    """Chat with Max, if configured (or scripted in sample-data mode)."""
+    mc = cfg.get("max_chat")
+    if app.demo:
+        folder = (mc or {}).get("store_dir") or tempfile.mkdtemp(prefix="hermes-demo-chat-")
+        return MaxChat({"store_dir": folder}, backend=DemoMax(), audit=app.audit)
+    if not mc:
+        return None
+    return MaxChat(mc, audit=app.audit)
+
+
+def make_handler(cfg, web_root, cache, app=None, chat=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
         app = App(cfg, cache)
+    if chat is None:
+        chat = make_chat(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -282,7 +298,9 @@ def make_handler(cfg, web_root, cache, app=None):
                 self._refuse()
                 return
             if path == "/api/me":
-                self._json(200, {**user, "version": VERSION, **app.meta()})
+                self._json(200, {**user, "version": VERSION, **app.meta(), "chat_ready": chat is not None})
+            elif path == "/api/chat" or path.startswith("/api/chat/"):
+                self._chat_get(path[len("/api/chat"):].strip("/"))
             elif path in get_routes:
                 self._json(200, get_routes[path]())
             elif path.startswith("/api/"):
@@ -325,9 +343,14 @@ def make_handler(cfg, web_root, cache, app=None):
                 return
             parts = self.path.split("?", 1)[0].strip("/").split("/")
             try:
-                result = self._dispatch(user, parts, body)
-            except ActionError as e:
+                if parts[:2] == ["api", "chat"]:
+                    result = self._chat_post(user, parts[2:], body)
+                else:
+                    result = self._dispatch(user, parts, body)
+            except (ActionError, ChatError) as e:
                 self._json(e.code, {"error": str(e)})
+                return
+            if result is STREAMED:
                 return
             if result is None:
                 self._json(404, {"error": "not found"})
@@ -352,6 +375,55 @@ def make_handler(cfg, web_root, cache, app=None):
                 cache.forget()
                 return app.stop(user, body)
             return None
+
+        def _need_chat(self):
+            if chat is None:
+                raise ChatError(503, "Chat with Max isn't connected on the server yet.")
+            return chat
+
+        def _chat_get(self, rest):
+            try:
+                c = self._need_chat()
+                if not rest:
+                    self._json(200, {"ok": True, **c.list(), **app.meta()})
+                elif SAFE_ID.fullmatch(rest):
+                    self._json(200, c.get(rest))
+                else:
+                    self._json(404, {"error": "not found"})
+            except ChatError as e:
+                self._json(e.code, {"ok": False, "error": str(e), **app.meta()})
+
+        def _chat_post(self, user, p, body):
+            c = self._need_chat()
+            if any(not SAFE_ID.fullmatch(x) for x in p):
+                raise ChatError(400, "Bad id.")
+            if p == []:
+                return c.new()
+            if len(p) == 2 and p[1] == "stop":
+                return c.stop(user, p[0])
+            if len(p) == 2 and p[1] == "delete":
+                return c.delete(user, p[0])
+            if len(p) == 2 and p[1] == "send":
+                conv, upstream = c.begin(user, p[0], body.get("text"))
+                self._stream(lambda emit: c.run(conv, upstream, emit))
+                return STREAMED
+            return None
+
+        def _stream(self, run):
+            """Server-Sent Events to the browser, one JSON object per event."""
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            for k, v in SECURITY_HEADERS.items():
+                self.send_header(k, v)
+            self.end_headers()
+
+            def emit(ev):
+                self.wfile.write(b"data: " + json.dumps(ev).encode() + b"\n\n")
+                self.wfile.flush()
+            run(emit)
 
         do_PUT = do_DELETE = do_PATCH = lambda self: self._json(405, {"error": "not allowed"})
 
@@ -394,7 +466,7 @@ def main(argv=None):
     demo = Demo() if cfg.get("demo") else None
     app = App(cfg, cache, demo=demo)
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
-                              make_handler(cfg, args.web, cache, app))
+                              make_handler(cfg, args.web, cache, app, make_chat(cfg, app)))
     print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
           f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()

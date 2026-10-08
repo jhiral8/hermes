@@ -22,3 +22,6 @@
 .offline-pill i { background: var(--err) !important; }
 
 textarea.inp { resize: vertical; min-height: 88px; font: inherit; }
+
+/* Max chat: the bottom bar covers the footnote on phones. */
+@media (max-width:1023px){ .mc-hint{display:none} main .mc-app{height:calc(100dvh - 164px);min-height:360px} }

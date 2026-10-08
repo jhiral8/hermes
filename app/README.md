@@ -27,7 +27,7 @@ Design reference: the Hermes Workspace mockup (https://claude.ai/artifact/LfwAwD
 
 ## Tests
 
-    cd app/server && python3 -m unittest -v test_hermes_app test_api
+    cd app/server && python3 -m unittest -v test_hermes_app test_api test_chat
 
 ## Status
 
@@ -37,6 +37,8 @@ Design reference: the Hermes Workspace mockup (https://claude.ai/artifact/LfwAwD
   Actions: create a task, decide a board approval, pause or resume an agent,
   stop a run, block all agent work. Email approvals stay on the broker's
   fingerprint page.
+- Phase 3: chat with Max (the mockup's Max screen) through Hermes Agent's API
+  server, streamed, with tool calls shown and transcripts kept on the server.
 
 Try it without the real services: set `"demo": true` in a local config. The
 app then shows a "Sample data" chip on every screen.

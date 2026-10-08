@@ -115,3 +115,39 @@ approval decided in the app shows as decided in Paperclip; a broker email
 waiting for approval shows in the app with a link to the fingerprint page;
 and (once Craig agrees) Block all agent work stops the agents and the System
 screen shows the kill switch On.
+
+# Phase 3: chat with Max
+
+The app talks to Max through Hermes Agent's own API server on
+127.0.0.1:8642 (the one `/health` already answers on), using its Responses
+API with one named conversation per app chat. Max keeps his sandbox, the
+broker approvals and the kill switch exactly as on Signal. Transcripts are
+kept in `/var/lib/hermes-app/chat` (mode 600). Max's API key lets the app start
+turns as Craig, so it is readable by root and hermes-app only.
+
+## Steps
+
+1. Update the code (`git pull` on the branch) and restart hermes-app.
+2. Check the API server: `GET /v1/capabilities` with the key must list the
+   Responses API. Read the key name only, not the value: is `API_SERVER_KEY`
+   set in Max's environment or `gateway.api_server.key` in his config.yaml?
+   - If a key is set: copy it to `/etc/hermes-app/max-api.key`, owner
+     `root:hermes-app`, mode `640`.
+   - If none is set: generate one (`openssl rand -hex 32`), put it in Max's
+     environment as `API_SERVER_KEY` and in `/etc/hermes-app/max-api.key`, and
+     restart Max's gateway (`systemctl --user restart hermes-gateway` as the
+     hermes user). Check Signal still answers.
+   - Never print the key.
+3. Check what Max does when a tool needs his own "dangerous command" approval
+   over the API server (approval mode in his config). Report it; don't change it.
+4. Add `max_chat` to the config (see `config.example.json`) and restart.
+5. Test once through the app's API with the login header:
+   `POST /api/chat` (with `X-Hermes-Action: 1`), then
+   `POST /api/chat/<id>/send {"text": "Reply with just the word ok."}`.
+   The stream should end with `{"type": "end", "status": "done"}`.
+
+## Done when
+
+Craig opens Max in the app, sends a message, sees the reply stream in with
+any tool calls listed, and the chat is still there after a reload. With the
+kill switch on, the app refuses to send and says why.

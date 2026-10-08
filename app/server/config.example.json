@@ -95,5 +95,11 @@
   },
   "stop": {
     "request_file": "/var/lib/hermes-app/stop-request"
+  },
+  "max_chat": {
+    "url": "http://127.0.0.1:8642",
+    "key_file": "/etc/hermes-app/max-api.key",
+    "store_dir": "/var/lib/hermes-app/chat",
+    "kill_flag": "/etc/hermes-paused"
   }
 }
