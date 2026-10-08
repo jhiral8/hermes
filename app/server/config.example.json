@@ -125,5 +125,15 @@
   "inbox": {
     "token_file": "/etc/hermes-app/inbox/gmail-real.token",
     "timeout": 8
+  },
+  "foods": {
+    "off_enabled": false,
+    "timeout": 6,
+    "nutritrace": {
+      "write_key_file": "/etc/hermes-app/health/nutritrace-write.key",
+      "foods_list_path": null,
+      "foods_create_path": null,
+      "save_enabled": false
+    }
   }
 }

@@ -250,3 +250,24 @@ Refusals go to an audit file that never records tokens.
    handoffs, plans and shared findings, beside each agent's own memory notebook.
 5. Test: restoring a trashed page still works; a page moved to trash in
    trash-counts mode is refused.
+
+## Barcode scan and saved foods (Food screen)
+
+The camera reads the barcode in the browser (the phone's own barcode reader, or
+the bundled ZXing build in `app/web/vendor/zxing`). The number goes to the server.
+Nothing here goes to Max or any model.
+
+1. Open Food Facts lookup is off by default (`foods.off_enabled` in the config).
+   It is switched on only after Craig's explicit yes. When on, the server calls
+   `world.openfoodfacts.org` with no key, caches answers for a day, and allows
+   one call a second. Egress for that is the only new outside access.
+2. Saving to NutriTrace needs a write-scoped key, separate from the read-only
+   key: `/etc/hermes-app/health/nutritrace-write.key`, owner root, group
+   hermes-app, mode 0640. Phase-one mints it server-side. Craig is not asked for it.
+3. Saving stays off (`foods.nutritrace.save_enabled` false) until NutriTrace's
+   saved-foods endpoints are confirmed against its schema. Set
+   `foods_list_path`, `foods_create_path` and `save_enabled` together, after that
+   check. Until then "Saved foods" and "Save food" say they aren't connected yet.
+4. Test: `GET /api/health/barcode/<code>` with the login header returns the
+   product (with lookup on), or says "Barcode lookup is off" (with lookup off).
+   `POST /api/health/foods` without the X-Hermes-Action header is refused.

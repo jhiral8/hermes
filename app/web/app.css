@@ -29,3 +29,12 @@ textarea.inp { resize: vertical; min-height: 88px; font: inherit; }
 /* Health: the weekly grid's days are links (the mockup uses buttons). */
 a.g-col{text-decoration:none}
 a.iconbtn{display:inline-flex;align-items:center;justify-content:center}
+
+/* Barcode scan and saved foods */
+.scan-box { position: relative; background: #000; border-radius: var(--r-md, 12px); overflow: hidden; aspect-ratio: 4 / 3; }
+.scan-box video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-aim { position: absolute; inset: 22% 12%; border: 2px solid rgba(255, 255, 255, .85); border-radius: 10px; box-shadow: 0 0 0 999px rgba(0, 0, 0, .25); pointer-events: none; }
+.food-grid { display: grid; gap: 6px; }
+.food-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 14px; }
+.food-row .inp { min-width: 0; }
+.food-head { font-size: 12px; font-weight: 550; color: var(--fg-3); }

@@ -666,6 +666,19 @@ async function act(name, arg, el) {
   const busy = (on) => { if (el) el.disabled = on; };
   try {
     if (name === "close") return closeModal();
+    if (name === "scanLookup") {
+      const code = ($("#scan-code").value || "").replace(/\s+/g, "");
+      if (!/^\d{8,14}$/.test(code)) return toast("Type the number under the barcode (8 to 14 digits).");
+      location.hash = `#health/draft/${code}`;
+      return;
+    }
+    if (name === "foodSave") {
+      busy(true);
+      const r = await api("/api/health/foods", { body: foodFromForm() });
+      toast(`Saved ${r.result && r.result.name ? r.result.name : "the food"} to NutriTrace.`);
+      location.hash = "#health/saved";
+      return;
+    }
     if (name === "createTask") return openCreateTask();
     if (name === "newChat") { S.chatDraft = ""; location.hash = "max/new"; setTimeout(() => { const b = $("#max-in"); if (b) b.focus(); }, 50); return; }
     if (name === "chatSend") return chatSend();
@@ -809,6 +822,9 @@ async function healthData(key, path) {
 const healthDown = (sub, title) => healthHead(sub, title) + notConnected("Health", "Couldn't reach the server.");
 
 async function screenHealth(rest) {
+  if (rest[0] === "scan") return screenScan();
+  if (rest[0] === "draft") return screenDraft(rest[1]);
+  if (rest[0] === "saved") return screenSaved();
   const sub = HEALTH_TABS.some(([k]) => k === rest[0]) ? rest[0] : "food";
   if (sub === "food") return screenFood(isoDay(rest[1]));
   if (sub === "train") return screenTrain();
@@ -872,8 +888,8 @@ async function screenFood(day) {
         <div class="list">${m.items.map((i) => `<div class="li"><span class="main"><span class="t">${esc(i.name)}</span><span class="s">${esc(i.amount)}${i.brand ? " · " + esc(i.brand) : ""} · P ${fmtN(i.protein)} · C ${fmtN(i.carbs)} · F ${fmtN(i.fat)}</span></span><span class="end"><span class="kc">${fmtN(i.kcal)} kcal</span></span></div>`).join("")}</div></section>`).join("")}</div>`
         : `<div class="empty"><h3>Nothing logged for ${esc(dayName(cur))}</h3><p>Log it in NutriTrace and it appears here.</p></div>`}`;
 
-  return healthHead("food", "Food", appLink(links.nutritrace, "Log food in NutriTrace", "btn primary"),
-      "Read-only for now. Logging stays in NutriTrace until this screen matches it.") + `
+  return healthHead("food", "Food", `<a class="btn primary" href="#health/scan">Scan a barcode</a><a class="btn" href="#health/saved">Saved foods</a>${appLink(links.nutritrace, "Log food in NutriTrace", "btn")}`,
+      "Logging stays in NutriTrace for now. Saved foods are kept in its catalogue.") + `
     <div class="stack s24">
       <div class="row-flex"><div class="btns">
         <a class="iconbtn" href="#health/food/${shiftDay(cur, -1)}" aria-label="Previous day">${ic("back")}</a>
@@ -890,6 +906,163 @@ async function screenFood(day) {
       </section>
       ${dayBody}
       <p class="xs muted">Weight history isn't readable by the apps' tokens yet, so it isn't shown here.</p>
+    </div>`;
+}
+
+/* ---------- Barcode scan and saved foods ----------
+   The camera reads the code in the browser (BarcodeDetector, or the bundled
+   ZXing build). The number goes to the server, which asks Open Food Facts only
+   if lookups are switched on. Nothing here goes to Max. */
+
+let zxingLoading = null;
+function loadZxing() {
+  if (window.ZXingBrowser) return Promise.resolve(window.ZXingBrowser);
+  if (!zxingLoading) {
+    zxingLoading = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/vendor/zxing/zxing-browser.min.js";
+      s.onload = () => (window.ZXingBrowser ? resolve(window.ZXingBrowser) : reject(new Error("no reader")));
+      s.onerror = () => reject(new Error("the barcode reader didn't load"));
+      document.head.append(s);
+    });
+  }
+  return zxingLoading;
+}
+
+function stopScan() {
+  const s = S.scan;
+  if (!s) return;
+  S.scan = null;
+  s.stop();
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopScan(); });
+
+async function screenScan() {
+  return healthHead("food", "Scan a barcode", "", "Point the camera at the barcode on the packet.") + `
+    <div class="stack s24">
+      <section class="panel"><div class="scan-box"><video id="scan-v" playsinline muted aria-label="Camera view"></video><div class="scan-aim" aria-hidden="true"></div></div>
+        <p id="scan-msg" class="small muted" role="status">Starting the camera…</p></section>
+      <section class="panel"><div class="field"><label for="scan-code">Or type the number under the barcode</label>
+        <div class="btns"><input id="scan-code" class="inp" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="e.g. 5012345678900">
+        <button type="button" class="btn primary" data-act="scanLookup">Look up</button><a class="btn ghost" href="#health/draft/manual">Enter by hand</a></div></div></section>
+    </div>`;
+}
+
+// Starts the camera once the scan screen is in the page. A missing camera
+// leaves the typed-number and by-hand routes working.
+async function startScan() {
+  const video = $("#scan-v");
+  const say = (t) => { const m = $("#scan-msg"); if (m) m.textContent = t; };
+  if (!video) return;
+  let stream;
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no camera");
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+  } catch (_) {
+    say("The camera isn't available here. Type the number below, or enter the food by hand.");
+    return;
+  }
+  const session = { stream, timer: null, reader: null, stop: () => {} };
+  S.scan = session;
+  session.stop = () => {
+    clearInterval(session.timer);
+    if (session.reader) session.reader.reset();
+    stream.getTracks().forEach((t) => t.stop());
+    video.srcObject = null;
+  };
+  const found = (code) => {
+    if (S.scan !== session) return;
+    stopScan();
+    location.hash = `#health/draft/${code}`;
+  };
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  if (S.scan !== session) return;
+  if ("BarcodeDetector" in window) {
+    const detector = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+    session.timer = setInterval(async () => {
+      try {
+        const hits = await detector.detect(video);
+        if (hits.length) found(hits[0].rawValue);
+      } catch (_) { /* a frame that wasn't ready */ }
+    }, 300);
+    say("Hold the barcode in the box.");
+    return;
+  }
+  try {
+    const Z = await loadZxing();
+    if (S.scan !== session) return;
+    session.reader = new Z.BrowserMultiFormatReader();
+    session.reader.decodeFromVideoElement(video, (result) => { if (result) found(result.getText()); });
+    say("Hold the barcode in the box.");
+  } catch (e) {
+    say("This browser can't read barcodes here. Type the number below, or enter the food by hand.");
+  }
+}
+
+const FOOD_ROWS = [["kcal", "Calories", "kcal"], ["protein", "Protein", "g"], ["carbs", "Carbohydrate", "g"], ["fat", "Fat", "g"], ["fibre", "Fibre", "g"]];
+
+async function screenDraft(code) {
+  const manual = !code || code === "manual";
+  let note = "";
+  let p = null;
+  if (!manual) {
+    try {
+      const d = await api(`/api/health/barcode/${encodeURIComponent(code)}`);
+      if (d.product && d.product.found) p = d.product;
+      else note = `<div class="notice warn" role="status">${ic("alert")}<div><b>No product for ${esc(code)}.</b> Type it in from the packet.</div></div>`;
+    } catch (e) {
+      note = notConnected("Barcode lookup", e.message);
+    }
+  }
+  const val = (basis, k) => (p && p[basis] && p[basis][k] != null ? p[basis][k] : "");
+  const cell = (basis, k, label) => `<input class="inp" type="number" inputmode="decimal" min="0" step="0.1" data-f="${basis}.${k}" value="${esc(val(basis, k))}" aria-label="${esc(label)}">`;
+  const meta = p ? `From ${esc(p.source)}, retrieved ${esc(dayName(p.retrieved))}. ` : "";
+  return healthHead("food", p ? "Check the food" : "New food", "", "Blank means unknown, not zero.") + `
+    <div class="stack s24">
+      ${note}
+      <div id="food-form" data-source="${esc(p ? p.source : "")}" data-retrieved="${esc(p ? p.retrieved : "")}">
+        <section class="panel"><div class="stack s16">
+          <div class="field"><label for="f-name">Name</label><input id="f-name" class="inp" data-f="name" maxlength="120" value="${esc(p ? p.name : "")}"></div>
+          <div class="field"><label for="f-brand">Brand</label><input id="f-brand" class="inp" data-f="brand" maxlength="80" value="${esc(p ? p.brand : "")}"></div>
+          <div class="field"><label for="f-serving">Serving</label><input id="f-serving" class="inp" data-f="serving" maxlength="60" placeholder="e.g. 250 ml" value="${esc(p && p.serving ? p.serving : "")}"></div>
+        </div></section>
+        <section class="panel"><div class="panel-h"><h2>Nutrition</h2></div>
+          <div class="food-grid" role="table" aria-label="Nutrition per 100 g and per serving">
+            <div class="food-row food-head" role="row"><span role="columnheader"></span><span role="columnheader">Per 100 g</span><span role="columnheader">Per serving</span></div>
+            ${FOOD_ROWS.map(([k, label, unit]) => `<div class="food-row" role="row"><span role="rowheader">${esc(label)} <span class="muted">(${unit})</span></span>${cell("per100", k, `${label} per 100 g`)}${cell("per_serving", k, `${label} per serving`)}</div>`).join("")}
+          </div>
+        </section>
+        <p class="xs muted">${meta}Check against the packet before saving.</p>
+      </div>
+      <div class="btns"><button type="button" class="btn primary" data-act="foodSave">Save food</button><a class="btn ghost" href="#health/food">Cancel</a></div>
+    </div>`;
+}
+
+function foodFromForm() {
+  const root = $("#food-form");
+  if (!root) throw new Error("The food form isn't on screen.");
+  const food = { name: "", brand: "", serving: "", per100: {}, per_serving: {}, source: root.dataset.source || "", retrieved: root.dataset.retrieved || "" };
+  root.querySelectorAll("[data-f]").forEach((el) => {
+    const [a, b] = el.dataset.f.split(".");
+    const v = el.value.trim();
+    if (b) food[a][b] = v === "" ? null : v;
+    else food[a] = v;
+  });
+  return food;
+}
+
+async function screenSaved() {
+  let d = null;
+  let err = "";
+  try { d = await api("/api/health/foods"); } catch (e) { err = e.message; }
+  const items = d && d.items ? d.items : [];
+  return healthHead("food", "Saved foods", `<a class="btn primary" href="#health/draft/manual">New food</a><a class="btn" href="#health/scan">Scan a barcode</a>`,
+      "Foods you've saved to NutriTrace's catalogue.") + `
+    <div class="stack s24">
+      ${err ? notConnected("Saved foods", err) : ""}
+      ${!err && !items.length ? `<div class="empty"><h3>No saved foods yet</h3><p>Scan a barcode or enter a food by hand, and save it here.</p></div>` : ""}
+      ${items.length ? `<section class="panel"><div class="list">${items.map((f) => `<div class="li"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${esc(f.serving || "")}${f.brand ? (f.serving ? " · " : "") + esc(f.brand) : ""}${f.source ? " · " + esc(f.source) : ""}</span></span><span class="end"><span class="kc">${fmtN(f.per_serving && f.per_serving.kcal)} kcal</span></span></div>`).join("")}</div></section>` : ""}
     </div>`;
 }
 
@@ -1076,6 +1249,7 @@ async function render() {
   const route = (location.hash || "#today").slice(1) || "today";
   const [area, ...rest] = route.split("/");
   const seq = ++renderSeq;
+  if (!(area === "health" && rest[0] === "scan")) stopScan();
   renderShell(route);
   let html;
   if (area === "today") html = await screenToday();
@@ -1094,6 +1268,7 @@ async function render() {
   if (!S.cache.approvals && area !== "approvals") load("approvals", "/api/approvals").then(() => renderShell(route));
   renderShell(route);
   $("#main").innerHTML = html;
+  if (area === "health" && rest[0] === "scan") startScan();
   if (area === "max") {
     chatScroll();
     // An answer still running on the server (phone slept, page reloaded): check back.

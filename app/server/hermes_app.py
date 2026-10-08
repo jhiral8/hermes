@@ -37,8 +37,10 @@ from demo import Demo
 from health import Health
 import demo_health
 from inbox import Gmail, SampleMail
+import foods as food_lookup
+from foods import Catalogue, Foods, Lookup
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 STREAMED = object()  # a handler already wrote the response
 HERE = Path(__file__).resolve().parent
 DEFAULT_WEB = HERE.parent / "web"
@@ -54,7 +56,7 @@ SECURITY_HEADERS = {
     ),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Permissions-Policy": "camera=(self), microphone=(), geolocation=()",
 }
 
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -270,11 +272,23 @@ def make_inbox(cfg, app):
     return Gmail(ic) if ic else None
 
 
+def make_foods(cfg, app):
+    """Barcode lookup and saved foods for the Food screen (sample data in sample-data mode)."""
+    if app.demo:
+        return Foods(Lookup({"off_enabled": True}, opener=food_lookup.sample_opener))
+    fc = cfg.get("foods")
+    if not fc:
+        return None
+    hc = (cfg.get("health") or {}).get("nutritrace")
+    cat = Catalogue({**hc, **(fc.get("nutritrace") or {})}) if hc else None
+    return Foods(Lookup(fc), cat)
+
+
 def _today_london():
     return Health({}).today()
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None):
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -287,6 +301,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         health = make_health(cfg, app)
     if inbox is None:
         inbox = make_inbox(cfg, app)
+    if foods is None:
+        foods = make_foods(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -354,6 +370,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._chat_get(path[len("/api/chat"):].strip("/"))
             elif path == "/api/inbox" or path.startswith("/api/inbox/"):
                 self._inbox_get(path[len("/api/inbox"):].strip("/"))
+            elif path == "/api/health/foods" or path.startswith("/api/health/barcode/"):
+                self._foods_get(path[len("/api/health/"):])
             elif path.startswith("/api/health/"):
                 self._health_get(path[len("/api/health/"):])
             elif path in get_routes:
@@ -400,6 +418,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             try:
                 if parts[:2] == ["api", "chat"]:
                     result = self._chat_post(user, parts[2:], body)
+                elif parts == ["api", "health", "foods"]:
+                    result = self._foods_do(lambda: foods.save(body))
                 else:
                     result = self._dispatch(user, parts, body)
             except (ActionError, ChatError) as e:
@@ -492,6 +512,27 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 return
             self._json(200, {"ok": True, **out, **app.meta()})
 
+        def _foods_do(self, fn):
+            if foods is None:
+                raise ActionError(503, "Food lookup isn't connected on the server yet.")
+            try:
+                return {"ok": True, **fn(), **app.meta()}
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            except ValueError as e:
+                raise ActionError(400, str(e))
+
+        def _foods_get(self, what):
+            try:
+                if what == "foods":
+                    out = self._foods_do(foods.saved if foods else None)
+                else:
+                    out = self._foods_do(lambda: foods.product(what[len("barcode/"):]))
+            except ActionError as e:
+                self._json(e.code, {"ok": False, "error": str(e), **app.meta()})
+                return
+            self._json(200, out)
+
         def _artifact_get(self, name):
             try:
                 if artifacts is None:
@@ -578,7 +619,7 @@ def main(argv=None):
     artifacts = make_artifacts(cfg, app)
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
                               make_handler(cfg, args.web, cache, app, make_chat(cfg, app, artifacts), artifacts,
-                                           make_health(cfg, app), make_inbox(cfg, app)))
+                                           make_health(cfg, app), make_inbox(cfg, app), make_foods(cfg, app)))
     print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
           f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()
