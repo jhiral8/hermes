@@ -230,3 +230,23 @@ script, so the file holds no food names.
 3. Schedule it nightly after the feed is written.
 
 Until those files exist, both tiles say "not available yet".
+
+## Salt: delete blocker and Team notebook (agents write, nobody deletes)
+
+salt.md's tokens are only read or read-write, so the "no delete" rule runs in
+front of salt, in `app/server/salt_guard.py`. It refuses, by name, the MCP tools
+`delete_view` and `delete_comment`, any HTTP DELETE, and, in `trash-counts`
+mode, `set_trashed` (moving to trash). Restoring from trash is always allowed.
+Refusals go to an audit file that never records tokens.
+
+1. Run it as the hermes user, loopback only, pointing at salt's own address:
+   `python3 salt_guard.py --upstream http://127.0.0.1:8420 --listen 127.0.0.1:11100 --mode <trash-counts|trash-allowed> --audit /var/lib/hermes-app-feed/salt-guard.jsonl`
+   Confirm 8420 is salt's loopback port before starting it.
+2. Point the agents' salt MCP address at `http://127.0.0.1:11100/mcp` (Max, Codex, Claude).
+   Their tokens stay the same.
+3. Check with `whoami` through the guard: read-write on all notebooks, and a
+   `delete_comment` call comes back refused.
+4. Team notebook: one shared workspace where Max, Codex and Claude write
+   handoffs, plans and shared findings, beside each agent's own memory notebook.
+5. Test: restoring a trashed page still works; a page moved to trash in
+   trash-counts mode is refused.
