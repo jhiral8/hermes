@@ -2,6 +2,9 @@
 Description=Hermes regression pack (injection + research cases)
 After=network-online.target
 
+# Skipped while the kill switch is on.
+ConditionPathExists=!/etc/hermes-paused
+
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/hermes-evals/evals.env

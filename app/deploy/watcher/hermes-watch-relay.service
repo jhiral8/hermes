@@ -2,6 +2,9 @@
 Description=Hermes page watcher relay (poll changedetection, summarise, Signal)
 After=network-online.target
 
+# Skipped while the kill switch is on.
+ConditionPathExists=!/etc/hermes-paused
+
 [Service]
 Type=oneshot
 User=watch

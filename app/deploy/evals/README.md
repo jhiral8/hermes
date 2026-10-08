@@ -27,7 +27,8 @@ Monthly (1st, 10:00 UK) via `hermes-evals.timer`, result to Signal as `[Tests] 9
 ## Install outline (phase-one server session)
 
 1. Copy to `/srv/evals/`. Copy Max's API key (same one the app uses) to `/etc/hermes-evals/max-api.key` (0600 root).
-2. Fill `/etc/hermes-evals/evals.env` from the example: `BROKER_COUNT_CMD` (how to count broker requests), `BROKER_TEST_CMD` (broker test suite, verbose), `MEMORY_FILES` (Max's MEMORY.md and USER.md), `NOTIFY_CMD` (a Signal sender with a fixed recipient: it only ever messages Craig, takes the text on stdin and has no recipient argument). `BROKER_TEST_CMD` needs the broker's full test folder on the server; copy all of the broker's test files, not just the code, or the run fails before any test starts.
-3. `python3 run_evals.py --dry-run`, then a real run. If R3 to R5 say "add one", add those three small tests to the broker suite (the hard rules already exist; the tests just pin them) and rerun.
-4. Install the service and timer; add `latest.json`'s pass count to the Monday digest.
+2. Fill `/etc/hermes-evals/evals.env` from the example: `BROKER_COUNT_CMD` (how to count broker requests), `BROKER_TEST_CMD` (broker test suite, verbose), `MEMORY_FILES` (Max's MEMORY.md and USER.md), `NOTIFY_CMD` (`/usr/local/bin/hermes-notify`, the fixed-recipient Signal sender: Craig only, text on stdin).
+   The broker tests run from a copy at `/srv/evals/broker`: the broker repo's code, `tests/`, `deploy/` and `server-scripts/{egress,browser}`. Run them in `/srv/evals/venv` (made with `--system-site-packages`, plus a `broker.pth` pointing at the copy). Copying only the code fails before any test starts.
+3. `python3 run_evals.py --dry-run`, then a real run. R3 and R4 are pinned by `tests/test_evals_pins.py` in the broker repo. R4 pins what the broker actually does: an identical repeat is `rejected_by_rule`, and a reworded email becomes a new pending request that needs its own approval. If any of R3 to R5 say "add one", add the test there and rerun.
+4. Install the service and timer (the service skips while `/etc/hermes-paused` exists); add `latest.json`'s pass count to the Monday digest.
 5. After the run, check Max's memory files contain no `evil.example` (the runner checks this; this is a belt-and-braces look).
