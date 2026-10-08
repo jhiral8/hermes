@@ -145,8 +145,8 @@ class Server(unittest.TestCase):
         code, _, body = self.get("/%2e%2e/server/hermes_app.py")
         self.assertNotIn(b"import", body)
 
-    def test_read_only(self):
-        self.assertEqual(self.get("/api/status", method="POST")[0], 405)
+    def test_post_needs_the_app_header(self):
+        self.assertEqual(self.get("/api/status", method="POST")[0], 403)
 
 
 class Config(unittest.TestCase):

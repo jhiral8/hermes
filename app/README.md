@@ -10,6 +10,8 @@ Design reference: the Hermes Workspace mockup (https://claude.ai/artifact/LfwAwD
 ## Layout
 
 - `web/`: the app itself. Plain HTML, CSS and JavaScript, no build step.
+  `hermes.css`, `icons.js` and the Geist fonts are the mockup's own design
+  system, carried over unchanged; `app.css` holds the few additions.
 - `server/hermes_app.py`: the small server that serves `web/` and a read-only
   API. Python standard library only, so nothing is installed on the server.
 - `deploy/`: the systemd unit and the deployment steps.
@@ -17,16 +19,24 @@ Design reference: the Hermes Workspace mockup (https://claude.ai/artifact/LfwAwD
 ## Rules
 
 - Only Craig's Tailscale login gets in (Tailscale serve adds the header).
-- The server listens on loopback only, holds no keys and cannot send anything.
+- The server listens on loopback only. Its one key is a Paperclip board key
+  for Craig's own board actions; it holds no model keys and cannot send email.
 - Private data (mail, calendar, health, Personal notes) is never passed to Max
   or any model.
 - A service that can't be checked shows as Unknown, never as up or down.
 
 ## Tests
 
-    cd app/server && python3 -m unittest -v test_hermes_app
+    cd app/server && python3 -m unittest -v test_hermes_app test_api
 
-## Phase 1 status
+## Status
 
-Today and System screens: live status of Max, Paperclip, the approval broker,
-the kill switch, the health apps, salt.md and the nightly backup.
+- Phase 1: installable app, live server status. Deployed.
+- Phase 2: the mockup's Today, Work, Agents, Routines, Approvals and System
+  screens on the real Paperclip board, approval broker and cost monitor.
+  Actions: create a task, decide a board approval, pause or resume an agent,
+  stop a run, block all agent work. Email approvals stay on the broker's
+  fingerprint page.
+
+Try it without the real services: set `"demo": true` in a local config. The
+app then shows a "Sample data" chip on every screen.

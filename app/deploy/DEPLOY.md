@@ -52,3 +52,54 @@ System screen shows live status with no sign-in form.
 - Updating: `cd /opt/hermes-app && sudo git pull && sudo systemctl restart hermes-app`.
 - Not part of the nightly backup on purpose: the code is in git and the config
   is rebuilt from this file.
+
+# Phase 2: the control centre
+
+Phase 2 connects the app to the Paperclip board, the approval broker and the
+cost monitor, and adds a few of Craig's own actions (create a task, decide a
+board approval, pause an agent, stop a run, block all agent work). Every
+action is logged to `/var/lib/hermes-app/actions.log`.
+
+## Steps
+
+1. Update the code: `cd /opt/hermes-app && sudo git fetch && sudo git checkout <branch> && sudo git pull`.
+2. Reinstall the unit (it now has a state folder for the audit log):
+   `sudo cp app/deploy/hermes-app.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
+3. Paperclip: create a board API key for the app (Craig's board, named
+   "Hermes app") and save it to `/etc/hermes-app/paperclip.key`, owner
+   `root:hermes-app`, mode `640`. Never paste it in chat. Fill `paperclip` in the
+   config: the loopback URL, the company id, and `web_url` (the board address
+   Craig opens).
+4. Broker: fill `broker` with the path to its SQLite file and two SELECT
+   queries whose columns are aliased to `id, title, detail, recipients,
+   status, requested, expires, decided`. The app opens the file read-only. If
+   hermes-app can't read the file, add hermes-app to the file's group rather
+   than widening its permissions. `review_url` is the page Craig approves on.
+5. Cost monitor: point `cost_file` at the JSON file the hourly script writes,
+   and map `today_usd`, `month_usd`, `month_cap_usd` and `balance_usd` to its
+   keys (dotted paths work). Leave out any it doesn't have.
+6. Backup tile: point the `backup` service at the folder holding the nightly
+   backup's last-success file, readable by hermes-app.
+7. `sudo systemctl restart hermes-app` and check `/api/today` with the login
+   header: each section should say `"ok": true`.
+
+## Stop button (needs Craig's yes first: it adds root units)
+
+The app can't run the kill switch itself. It writes
+`/var/lib/hermes-app/stop-request`; a root-owned path unit sees it and runs
+the existing kill switch. Resuming stays on the Mac.
+
+    sudo cp app/deploy/hermes-app-stop.path app/deploy/hermes-app-stop.service /etc/systemd/system/
+    # check ExecStart in hermes-app-stop.service matches the real kill command
+    sudo systemctl daemon-reload && sudo systemctl enable --now hermes-app-stop.path
+
+Then set `"stop": {"request_file": "/var/lib/hermes-app/stop-request"}` in the
+config and restart. Until then the button shows as not connected.
+
+## Done when
+
+A task created in the app appears on the board and is picked up; a board
+approval decided in the app shows as decided in Paperclip; a broker email
+waiting for approval shows in the app with a link to the fingerprint page;
+and (once Craig agrees) Block all agent work stops the agents and the System
+screen shows the kill switch On.

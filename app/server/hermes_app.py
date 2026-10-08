@@ -8,14 +8,16 @@ It listens on loopback and is reached through `tailscale serve`, which adds
 the Tailscale-User-Login header for the signed-in tailnet user. Requests
 without an allowed login are refused, so there is no sign-in form.
 
-Phase 1 is read-only: it reports whether the existing services are up. It
-holds no send power and no model keys.
+It reports whether the existing services are up, reads the Paperclip board
+and the approval broker, and takes a few of Craig's own actions (see api.py).
+It holds no send power and no model keys.
 """
 
 import argparse
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import threading
 import time
@@ -25,7 +27,10 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.1.0"
+from api import ActionError, App
+from demo import Demo
+
+VERSION = "0.2.0"
 HERE = Path(__file__).resolve().parent
 DEFAULT_WEB = HERE.parent / "web"
 
@@ -34,7 +39,7 @@ OK, DOWN, UNKNOWN = "ok", "down", "unknown"
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
-        "default-src 'self'; img-src 'self' data:; style-src 'self'; "
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; "
         "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'self'"
     ),
@@ -46,6 +51,7 @@ SECURITY_HEADERS = {
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 def load_config(path):
@@ -154,6 +160,10 @@ class StatusCache:
         self._at = 0.0
         self._data = None
 
+    def forget(self):
+        with self._lock:
+            self._data = None
+
     def get(self):
         with self._lock:
             if self._data and time.time() - self._at < self.ttl:
@@ -176,9 +186,25 @@ class StatusCache:
 
 # ---------------------------------------------------------------- HTTP
 
-def make_handler(cfg, web_root, cache):
+MAX_BODY = 16 * 1024
+SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+
+
+def make_handler(cfg, web_root, cache, app=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
+    if app is None:
+        app = App(cfg, cache)
+
+    get_routes = {
+        "/api/today": app.today,
+        "/api/agents": app.agents,
+        "/api/work": app.work,
+        "/api/approvals": app.approvals,
+        "/api/routines": app.routines,
+        "/api/spending": app.spending,
+        "/api/status": cache.get,
+    }
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "hermes-app"
@@ -212,6 +238,11 @@ def make_handler(cfg, web_root, cache):
                         "name": self.headers.get("Tailscale-User-Name") or login}
             return None
 
+        def _refuse(self):
+            self._send(HTTPStatus.FORBIDDEN,
+                       b"Hermes: open this through Tailscale on one of Craig's devices.\n",
+                       "text/plain; charset=utf-8")
+
         def do_HEAD(self):
             self.do_GET()
 
@@ -221,24 +252,81 @@ def make_handler(cfg, web_root, cache):
             # still needs an allowed tailnet login.
             user = self._user()
             if user is None:
-                self._send(HTTPStatus.FORBIDDEN,
-                           b"Hermes: open this through Tailscale on one of Craig's devices.\n",
-                           "text/plain; charset=utf-8")
+                self._refuse()
                 return
             if path == "/api/me":
-                self._json(200, {**user, "version": VERSION})
-            elif path == "/api/status":
-                self._json(200, cache.get())
+                self._json(200, {**user, "version": VERSION, **app.meta()})
+            elif path in get_routes:
+                self._json(200, get_routes[path]())
             elif path.startswith("/api/"):
                 self._json(404, {"error": "not found"})
             else:
                 self._static(path)
 
-        def do_POST(self):
-            # Phase 1 is read-only.
-            self._json(405, {"error": "read-only"})
+        def _same_origin(self):
+            # Actions must come from the app itself: a custom header (which a
+            # cross-site form can't send) and, when present, a matching Origin.
+            if self.headers.get("X-Hermes-Action") != "1":
+                return False
+            origin = self.headers.get("Origin")
+            if origin:
+                host = self.headers.get("Host", "")
+                return origin.split("://", 1)[-1] == host
+            return True
 
-        do_PUT = do_DELETE = do_PATCH = do_POST
+        def do_POST(self):
+            user = self._user()
+            if user is None:
+                self._refuse()
+                return
+            if not self._same_origin():
+                self._json(403, {"error": "Actions must come from the Hermes app."})
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0 or length > MAX_BODY:
+                self._json(413, {"error": "Request too large."})
+                return
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                self._json(400, {"error": "Body must be a JSON object."})
+                return
+            parts = self.path.split("?", 1)[0].strip("/").split("/")
+            try:
+                result = self._dispatch(user, parts, body)
+            except ActionError as e:
+                self._json(e.code, {"error": str(e)})
+                return
+            if result is None:
+                self._json(404, {"error": "not found"})
+            else:
+                self._json(200, result)
+
+        def _dispatch(self, user, parts, body):
+            # parts starts with "api"
+            p = parts[1:] if parts and parts[0] == "api" else []
+            # Ids go into Paperclip URLs, so only plain id characters pass.
+            if any(not SAFE_ID.fullmatch(x) for x in p):
+                raise ActionError(400, "Bad id.")
+            if p == ["work", "tasks"]:
+                return app.create_task(user, body)
+            if len(p) == 3 and p[0] == "approvals" and p[1] == "board":
+                return app.decide(user, p[2], body)
+            if len(p) == 3 and p[0] == "agents" and p[2] in ("pause", "resume"):
+                return app.pause(user, p[1], p[2] == "pause")
+            if len(p) == 3 and p[0] == "runs" and p[2] == "cancel":
+                return app.cancel_run(user, p[1])
+            if p == ["stop"]:
+                cache.forget()
+                return app.stop(user, body)
+            return None
+
+        do_PUT = do_DELETE = do_PATCH = lambda self: self._json(405, {"error": "not allowed"})
 
         def _static(self, path):
             rel = path.lstrip("/") or "index.html"
@@ -256,8 +344,8 @@ def make_handler(cfg, web_root, cache):
                 ctype += "; charset=utf-8"
             # The shell and service worker must revalidate so updates land.
             cache_ctl = "no-cache"
-            if target.parent.name == "icons":
-                cache_ctl = "max-age=86400"
+            if target.parent.name in ("icons", "fonts"):
+                cache_ctl = "max-age=604800"
             extra = {"Cache-Control": cache_ctl}
             if target.name == "sw.js":
                 extra["Service-Worker-Allowed"] = "/"
@@ -276,9 +364,12 @@ def main(argv=None):
     if cfg["listen_host"] not in ("127.0.0.1", "::1", "localhost"):
         raise SystemExit("listen_host must be loopback; Tailscale serve fronts it")
     cache = StatusCache(cfg["services"], cfg["cache_seconds"])
+    demo = Demo() if cfg.get("demo") else None
+    app = App(cfg, cache, demo=demo)
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
-                              make_handler(cfg, args.web, cache))
-    print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}", flush=True)
+                              make_handler(cfg, args.web, cache, app))
+    print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
+          f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()
 
 

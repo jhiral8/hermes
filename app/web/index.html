@@ -8,65 +8,23 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="preload" href="/fonts/geist-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/hermes.css">
 <link rel="stylesheet" href="/app.css">
+<script src="/icons.js" defer></script>
 <script src="/app.js" defer></script>
 </head>
 <body>
-<div class="shell">
-  <aside class="side" aria-label="Main">
-    <a class="brand" href="#today" aria-label="Hermes home">
-      <img src="/icons/icon.svg" alt="" width="28" height="28">
-      <span>Hermes</span>
-    </a>
-    <nav class="nav">
-      <a href="#today" data-view="today">Today</a>
-      <a href="#system" data-view="system">System</a>
-      <p class="nav-group">Coming next</p>
-      <span class="nav-soon">Agents and Work <em>Phase 2</em></span>
-      <span class="nav-soon">Approvals <em>Phase 2</em></span>
-      <span class="nav-soon">Max <em>Phase 3</em></span>
-      <span class="nav-soon">Health <em>Phase 4</em></span>
-      <span class="nav-soon">Notes <em>Phase 5</em></span>
-    </nav>
-    <p class="who" id="who">Checking sign-in…</p>
-  </aside>
-
-  <main class="main" id="main">
-    <section id="view-today" class="view" hidden>
-      <header class="view-head">
-        <h1 id="greeting">Today</h1>
-        <p class="sub" id="today-date"></p>
-      </header>
-      <div class="card summary" id="summary">
-        <p class="summary-line" id="summary-line">Checking the server…</p>
-        <p class="sub" id="summary-time"></p>
-        <a class="link" href="#system">See every service</a>
-      </div>
-      <div class="card">
-        <h2>Coming to this screen</h2>
-        <ul class="plain">
-          <li>Pending approvals and what agents are working on (Phase 2)</li>
-          <li>A chat bar to ask Max (Phase 3)</li>
-          <li>Calories, protein and training for the day (Phase 4)</li>
-        </ul>
-      </div>
-    </section>
-
-    <section id="view-system" class="view" hidden>
-      <header class="view-head">
-        <h1>System</h1>
-        <p class="sub" id="system-time"></p>
-      </header>
-      <p class="banner" id="offline" hidden>Can't reach the server. Showing the last check.</p>
-      <div id="groups"></div>
-      <button class="btn" id="refresh" type="button">Check again</button>
-    </section>
-  </main>
-
-  <nav class="tabs" aria-label="Main">
-    <a href="#today" data-view="today">Today</a>
-    <a href="#system" data-view="system">System</a>
-  </nav>
+<div id="app" class="app">
+  <aside class="side" id="side"></aside>
+  <div class="main-col">
+    <header class="top" id="top"></header>
+    <div id="banner"></div>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <nav class="bnav" id="bnav" aria-label="Primary"></nav>
 </div>
+<div id="overlay"></div>
+<div id="toasts" aria-live="polite" role="status"></div>
 </body>
 </html>

@@ -8,6 +8,9 @@ Type=simple
 User=hermes-app
 Group=hermes-app
 ExecStart=/usr/bin/python3 /opt/hermes-app/app/server/hermes_app.py --config /etc/hermes-app/config.json --web /opt/hermes-app/app/web
+# Audit log and the stop-request file live here; everything else is read-only.
+StateDirectory=hermes-app
+StateDirectoryMode=0750
 Restart=on-failure
 RestartSec=5
 
