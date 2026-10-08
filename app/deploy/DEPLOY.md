@@ -66,8 +66,9 @@ action is logged to `/var/lib/hermes-app/actions.log`.
 2. Reinstall the unit (it now has a state folder for the audit log):
    `sudo cp app/deploy/hermes-app.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
 3. Paperclip (v2026.1005.0, container orch-board-1, 127.0.0.1:3100): create a
-   board API key for the app (Craig's board, named "Hermes app"), the same way
-   the existing board key was made, and save it to
+   board API key for the app named "Hermes app": start a challenge with
+   `POST /api/cli-auth/challenges`, give Craig the approval link (one tap while
+   signed in to the board), then save the key to
    `/etc/hermes-app/paperclip.key`, owner `root:hermes-app`, mode `640`. Never
    paste it in chat. The config finds the company by name (`"company_name":
    "Jhiral"`), so its id isn't needed.
@@ -85,9 +86,12 @@ action is logged to `/var/lib/hermes-app/actions.log`.
      "exported N pending", and `/var/lib/hermes-app-feed/broker.json` exists.
 5. Cost: the app reads `/var/lib/hermes-cost/balance.csv` (provider
    `openrouter`; spend is the rise in `used` between checks). Set
-   `month_cap_usd` from `/etc/hermes-cost/config.json`. If hermes-app can't
-   read the CSV, give it read on that one file (`setfacl -m u:hermes-app:r`,
-   plus `x` on the folder); it holds only balances.
+   `month_cap_usd` to `monthly_budget_usd` from `/etc/hermes-cost/config.json`.
+   The folder is root 0700, so give hermes-app read on that one file and
+   traverse on the folder (`setfacl -m u:hermes-app:x /var/lib/hermes-cost`,
+   `setfacl -m u:hermes-app:r /var/lib/hermes-cost/balance.csv`); it holds only
+   balances. Check the cost script rewrites the file in place (append) so the
+   ACL survives; if it replaces the file, use a default ACL on the folder.
 6. Backup tile: kind `last_run` on `hermes-backup.service`. It asks
    `systemctl show` for the last run's result and time; no new permissions.
 7. `sudo systemctl restart hermes-app` and check `/api/today` with the login

@@ -85,8 +85,7 @@
     "web_url": "https://hermes-oracle.tail4abc29.ts.net:8444"
   },
   "broker": {
-    "feed_path": "/var/lib/hermes-app-feed/broker.json",
-    "review_url": "https://hermes-oracle.tail4abc29.ts.net/"
+    "feed_path": "/var/lib/hermes-app-feed/broker.json"
   },
   "cost_file": {
     "csv_path": "/var/lib/hermes-cost/balance.csv",

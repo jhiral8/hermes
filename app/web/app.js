@@ -41,8 +41,8 @@ function initials(name) {
 const ISSUE_TEXT = { backlog: "Backlog", todo: "To do", in_progress: "In progress", in_review: "In review", done: "Done", blocked: "Blocked", cancelled: "Cancelled" };
 const ISSUE_BADGE = { done: "ok", in_review: "accent", in_progress: "info", blocked: "warn", todo: "", backlog: "", cancelled: "" };
 const AGENT_BADGE = { active: "ok", idle: "ok", running: "info", paused: "warn", error: "err", pending_approval: "accent" };
-const APPROVAL_BADGE = { pending: "warn", approved: "ok", sent: "ok", rejected: "err", denied: "err", expired: "", cancelled: "", revision_requested: "accent" };
-const APPROVAL_TEXT = { pending: "Pending", approved: "Approved", sent: "Sent", rejected: "Rejected", denied: "Denied", expired: "Expired", cancelled: "Cancelled", revision_requested: "Changes asked" };
+const APPROVAL_BADGE = { pending: "warn", approved: "ok", sent: "ok", executed: "ok", outcome_unknown: "warn", rejected: "err", denied: "err", expired: "", cancelled: "", revision_requested: "accent" };
+const APPROVAL_TEXT = { pending: "Pending", approved: "Approved", sent: "Sent", executed: "Sent", outcome_unknown: "Sent? Check inbox", rejected: "Rejected", denied: "Denied", expired: "Expired", cancelled: "Cancelled", revision_requested: "Changes asked" };
 const badge = (cls, text) => `<span class="badge ${cls || ""}">${esc(text)}</span>`;
 const authChip = (src) => src === "broker"
   ? `<span class="auth broker">${ic("lock", 13)}Broker</span>`
