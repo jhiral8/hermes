@@ -27,7 +27,7 @@ Design reference: the Hermes Workspace mockup (https://claude.ai/artifact/LfwAwD
 
 ## Tests
 
-    cd app/server && python3 -m unittest -v test_hermes_app test_api test_chat
+    cd app/server && python3 -m unittest -v test_hermes_app test_api test_chat test_artifacts
 
 ## Status
 
@@ -39,6 +39,8 @@ Design reference: the Hermes Workspace mockup (https://claude.ai/artifact/LfwAwD
   fingerprint page.
 - Phase 3: chat with Max (the mockup's Max screen) through Hermes Agent's API
   server, streamed, with tool calls shown and transcripts kept on the server.
+  Pages and documents Max saves to his artifacts folder open in the mockup's
+  side panel (pages in a sandbox with scripts and network off).
 
 Try it without the real services: set `"demo": true` in a local config. The
 app then shows a "Sample data" chip on every screen.

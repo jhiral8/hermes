@@ -133,6 +133,23 @@ class Chat(unittest.TestCase):
         conv2, up = c.begin(USER, conv["id"], "hi")
         self.assertEqual(c.run(conv2, up, lambda e: None)["error"], "model down")
 
+    def test_new_artifacts_are_linked_to_the_reply(self):
+        from artifacts import Artifacts
+        d = Path(tempfile.mkdtemp())
+
+        class Writes(HermesMax):
+            def events(self, resp):
+                (d / "brief.md").write_text("# Brief")
+                yield from HermesMax.events(resp)
+        backend = Writes({"url": "http://x"}, opener=FakeOpener(TURN))
+        c = MaxChat({"store_dir": tempfile.mkdtemp()}, backend=backend, artifacts=Artifacts(d))
+        conv = c.new()
+        conv2, up = c.begin(USER, conv["id"], "make a brief")
+        seen = []
+        reply = c.run(conv2, up, seen.append)
+        self.assertEqual(reply["artifacts"], ["brief.md"])
+        self.assertIn({"type": "artifacts", "names": ["brief.md"]}, seen)
+
     def test_store_lists_newest_first(self):
         s = ChatStore(tempfile.mkdtemp())
         a = s.new()

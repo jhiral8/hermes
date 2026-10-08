@@ -140,8 +140,23 @@ turns as Craig, so it is readable by root and hermes-app only.
    - Never print the key.
 3. Check what Max does when a tool needs his own "dangerous command" approval
    over the API server (approval mode in his config). Report it; don't change it.
-4. Add `max_chat` to the config (see `config.example.json`) and restart.
-5. Test once through the app's API with the login header:
+4. Artifacts (pages and documents Max makes, shown in the app's side panel):
+   - Create `/var/lib/hermes-artifacts`, writable by whatever user Max's
+     sandbox container writes files as, and readable (folder and new files)
+     by hermes-app, e.g. owner `hermes`, group `hermes-app`, mode `2750` with
+     the container's umask leaving files group-readable. Check by writing a
+     test file from inside Max's sandbox and reading it as hermes-app, then
+     delete it.
+   - Mount it into Max's sandbox: add
+     `"/var/lib/hermes-artifacts:/workspace/artifacts"` to the existing
+     `terminal.docker_volumes` list in Max's config.yaml (merge into the one
+     list; a second `docker_volumes:` key silently replaces the first).
+   - Install the skill: copy `app/deploy/max-skill-artifacts/SKILL.md` to
+     `~hermes/.hermes/skills/artifacts/SKILL.md` (owned by hermes).
+   - Restart Max's gateway and check Signal still answers.
+5. Add `max_chat` to the config (see `config.example.json`, including
+   `artifacts_dir`) and restart hermes-app.
+6. Test once through the app's API with the login header:
    `POST /api/chat` (with `X-Hermes-Action: 1`), then
    `POST /api/chat/<id>/send {"text": "Reply with just the word ok."}`.
    The stream should end with `{"type": "end", "status": "done"}`.
@@ -149,5 +164,7 @@ turns as Craig, so it is readable by root and hermes-app only.
 ## Done when
 
 Craig opens Max in the app, sends a message, sees the reply stream in with
-any tool calls listed, and the chat is still there after a reload. With the
+any tool calls listed, and the chat is still there after a reload. Asking
+Max for "a one-page summary as a page" puts a file card under his reply that
+opens in the side panel. With the
 kill switch on, the app refuses to send and says why.

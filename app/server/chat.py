@@ -199,11 +199,18 @@ class HermesMax:
 class DemoMax:
     """Scripted replies for sample-data mode."""
 
+    def __init__(self, artifact_dir=None):
+        self.artifact_dir = artifact_dir
+
     def open(self, cid, text):
         return text
 
-    @staticmethod
-    def events(text):
+    def events(self, text):
+        if self.artifact_dir and any(w in text.lower() for w in ("page", "doc", "artifact", "summary")):
+            Path(self.artifact_dir, "sample-summary.md").write_text(
+                "# Sample summary\n\nWritten by the sample-data Max for: *" + text[:80].replace("*", "") +
+                "*\n\n- On the server, Max saves real pages and documents here.\n- They open in this panel.\n",
+                encoding="utf-8")
         yield {"type": "tool", "id": "t1", "name": "search_notes", "args": json.dumps({"query": text[:40]})}
         time.sleep(0.4)
         yield {"type": "tool_done", "id": "t1", "result": "2 notes found"}
@@ -217,8 +224,9 @@ class DemoMax:
 
 
 class MaxChat:
-    def __init__(self, cfg, backend=None, store=None, audit=None):
+    def __init__(self, cfg, backend=None, store=None, audit=None, artifacts=None):
         cfg = cfg or {}
+        self.artifacts = artifacts
         self.store = store or ChatStore(cfg.get("store_dir", "/var/lib/hermes-app/chat"))
         self.backend = backend or HermesMax(cfg)
         self.kill_flag = cfg.get("kill_flag")
@@ -296,6 +304,7 @@ class MaxChat:
         the turn still runs to the end and is saved, so a phone that slept
         sees the whole answer when it comes back."""
         cid = conv["id"]
+        started = time.time()
         stop = self._stops.get(cid) or threading.Event()
         reply = {"role": "max", "text": "", "at": _now_iso(), "tools": [], "status": "done"}
         tools = {}
@@ -345,6 +354,11 @@ class MaxChat:
                     close()
                 except OSError:
                     pass
+            if self.artifacts is not None:
+                made = self.artifacts.since(started)
+                if made:
+                    reply["artifacts"] = made
+                    send({"type": "artifacts", "names": made})
             try:
                 latest = self.store.get(cid)
             except ChatError:

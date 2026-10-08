@@ -100,6 +100,7 @@
     "url": "http://127.0.0.1:8642",
     "key_file": "/etc/hermes-app/max-api.key",
     "store_dir": "/var/lib/hermes-app/chat",
-    "kill_flag": "/etc/hermes-paused"
+    "kill_flag": "/etc/hermes-paused",
+    "artifacts_dir": "/var/lib/hermes-artifacts"
   }
 }

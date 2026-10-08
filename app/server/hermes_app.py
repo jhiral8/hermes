@@ -23,12 +23,14 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from api import ActionError, App
+from artifacts import ArtifactError, Artifacts
 from chat import ChatError, DemoMax, MaxChat
 from demo import Demo
 
@@ -220,24 +222,43 @@ MAX_BODY = 16 * 1024
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 
 
-def make_chat(cfg, app):
+DEMO_PAGE = """<!doctype html><title>Desktop options one-pager</title>
+<style>body{font:15px/1.5 system-ui;margin:24px;color:#1b1b1b}h1{font-size:22px}.c{display:flex;gap:12px}
+.c div{border:1px solid #ddd;border-radius:10px;padding:12px;flex:1}</style>
+<h1>Hermes on the desktop</h1><p>Sample page made by the sample-data Max.</p>
+<div class="c"><div><b>PWA</b><br>No install, browser sandbox.</div><div><b>Tauri</b><br>Small, full offline.</div>
+<div><b>Electron</b><br>Most mature, heaviest.</div></div><script>document.body.style.background='red'</script>"""
+
+
+def make_artifacts(cfg, app):
+    folder = (cfg.get("max_chat") or {}).get("artifacts_dir")
+    if app.demo and not folder:
+        folder = tempfile.mkdtemp(prefix="hermes-demo-artifacts-")
+        Path(folder, "desktop-options.html").write_text(DEMO_PAGE, encoding="utf-8")
+    return Artifacts(folder) if folder else None
+
+
+def make_chat(cfg, app, artifacts=None):
     """Chat with Max, if configured (or scripted in sample-data mode)."""
     mc = cfg.get("max_chat")
     if app.demo:
         folder = (mc or {}).get("store_dir") or tempfile.mkdtemp(prefix="hermes-demo-chat-")
-        return MaxChat({"store_dir": folder}, backend=DemoMax(), audit=app.audit)
+        backend = DemoMax(artifacts.dir if artifacts else None)
+        return MaxChat({"store_dir": folder}, backend=backend, audit=app.audit, artifacts=artifacts)
     if not mc:
         return None
-    return MaxChat(mc, audit=app.audit)
+    return MaxChat(mc, audit=app.audit, artifacts=artifacts)
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None):
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
         app = App(cfg, cache)
+    if artifacts is None:
+        artifacts = make_artifacts(cfg, app)
     if chat is None:
-        chat = make_chat(cfg, app)
+        chat = make_chat(cfg, app, artifacts)
 
     get_routes = {
         "/api/today": app.today,
@@ -299,6 +320,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None):
                 return
             if path == "/api/me":
                 self._json(200, {**user, "version": VERSION, **app.meta(), "chat_ready": chat is not None})
+            elif path == "/api/artifacts" or path.startswith("/api/artifacts/"):
+                self._artifact_get(path[len("/api/artifacts"):].strip("/"))
             elif path == "/api/chat" or path.startswith("/api/chat/"):
                 self._chat_get(path[len("/api/chat"):].strip("/"))
             elif path in get_routes:
@@ -393,6 +416,17 @@ def make_handler(cfg, web_root, cache, app=None, chat=None):
             except ChatError as e:
                 self._json(e.code, {"ok": False, "error": str(e), **app.meta()})
 
+        def _artifact_get(self, name):
+            try:
+                if artifacts is None:
+                    raise ArtifactError(503, "Max's artifacts folder isn't connected yet.")
+                if not name:
+                    self._json(200, {"ok": True, "artifacts": artifacts.list()})
+                else:
+                    self._json(200, artifacts.get(urllib.parse.unquote(name)))
+            except ArtifactError as e:
+                self._json(e.code, {"ok": False, "error": str(e)})
+
         def _chat_post(self, user, p, body):
             c = self._need_chat()
             if any(not SAFE_ID.fullmatch(x) for x in p):
@@ -465,8 +499,9 @@ def main(argv=None):
     cache = StatusCache(cfg["services"], cfg["cache_seconds"])
     demo = Demo() if cfg.get("demo") else None
     app = App(cfg, cache, demo=demo)
+    artifacts = make_artifacts(cfg, app)
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
-                              make_handler(cfg, args.web, cache, app, make_chat(cfg, app)))
+                              make_handler(cfg, args.web, cache, app, make_chat(cfg, app, artifacts), artifacts))
     print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
           f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()

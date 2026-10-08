@@ -454,10 +454,11 @@ function md(text) {
       } else inCode = true;
       continue;
     }
-    const lines = b.split("\n");
+    if (!b.trim()) continue;
+    const lines = b.replace(/^\n+|\n+$/g, "").split("\n");
     if (lines.every((l) => /^\s*[-*•]\s+/.test(l))) out.push(`<ul>${lines.map((l) => `<li>${inline(l.replace(/^\s*[-*•]\s+/, ""))}</li>`).join("")}</ul>`);
     else if (lines.every((l) => /^\s*\d+[.)]\s+/.test(l))) out.push(`<ol>${lines.map((l) => `<li>${inline(l.replace(/^\s*\d+[.)]\s+/, ""))}</li>`).join("")}</ol>`);
-    else if (/^#{1,4}\s/.test(b)) out.push(`<h3>${inline(b.replace(/^#{1,4}\s+/, ""))}</h3>`);
+    else if (/^#{1,4}\s/.test(b) && lines.length === 1) out.push(b.startsWith("##") ? `<h3>${inline(b.replace(/^#{1,4}\s+/, ""))}</h3>` : `<h2>${inline(b.replace(/^#\s+/, ""))}</h2>`);
     else out.push(`<p>${lines.map(inline).join("<br>")}</p>`);
   }
   if (code.length) out.push(`<pre><code>${esc(code.join("\n\n").replace(/^```[^\n]*\n?/, ""))}</code></pre>`);
@@ -473,6 +474,47 @@ function chatTools(tools) {
   }).join("")}</div></details>`;
 }
 
+function chatArts(names) {
+  if (!names || !names.length) return "";
+  const meta = Object.fromEntries((S.artList || []).map((a) => [a.name, a]));
+  return `<div class="stack s8" style="margin-top:4px">${names.map((n) => {
+    const a = meta[n] || { title: n, label: "File" };
+    return `<button type="button" class="mc-art${S.art && S.art.name === n ? " on" : ""}" data-act="artOpen" data-arg="${esc(n)}"><span class="mc-art-ic">${ic("file", 18)}</span><span class="main"><b>${esc(a.title)}</b><span class="xs muted">${esc(a.label)} · ${esc(n)}</span></span>${ic("chev", 16)}</button>`;
+  }).join("")}</div>`;
+}
+
+function csvTable(text) {
+  const rows = text.trim().split(/\r?\n/).slice(0, 500).map((l) => l.split(","));
+  if (!rows.length) return "";
+  return `<table class="tbl"><thead><tr>${rows[0].map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${rows.slice(1).map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function artPanel() {
+  const st = S.art;
+  if (!st) return "";
+  const head = (kicker, title) => `<div class="art-h"><div style="min-width:0"><div class="xs muted">${esc(kicker)}</div><b class="art-t">${esc(title)}</b></div><span class="spacer"></span><button type="button" class="btn ghost sm art-back" data-act="artClose">${ic("back", 15)}Chat</button><button type="button" class="iconbtn art-x" data-act="artClose" aria-label="Close">${ic("close")}</button></div>`;
+  if (st.name === "*") {
+    const list = S.artList;
+    return `<aside class="art-panel" aria-label="Max's files">${head("Made by Max", "Files")}
+      ${list == null ? notConnected("Max's files", S.artErr) : list.length ? `<div class="list">${list.map((a) => `<a class="li" href="#" data-act="artOpen" data-arg="${esc(a.name)}"><span class="main"><span class="t">${esc(a.title)}</span><span class="s">${esc(a.label)} · ${esc(when(a.updated))}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div>` : `<p class="small muted">Nothing yet. Ask Max for a page, document or table and it appears here.</p>`}</aside>`;
+  }
+  const a = st.data;
+  if (!a) return `<aside class="art-panel" aria-label="File">${head("Loading", st.name)}<p class="small muted">${esc(st.error || "Opening…")}</p></aside>`;
+  const code = st.tab === "code";
+  let body;
+  if (code || a.kind === "json" || a.kind === "text") body = `<pre class="art-code">${esc(a.text)}</pre>`;
+  else if (a.kind === "html") body = `<iframe class="art-frame" sandbox="" referrerpolicy="no-referrer" title="${esc(a.title)} preview" srcdoc="${esc(a.text)}"></iframe>`;
+  else if (a.kind === "md") body = `<div class="md art-doc">${md(a.text)}</div>`;
+  else if (a.kind === "svg") body = `<div class="art-svg"><img alt="${esc(a.title)}" src="data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(a.text)))}"></div>`;
+  else if (a.kind === "csv") body = `<div class="art-doc" style="overflow:auto">${csvTable(a.text)}</div>`;
+  const tabs = ["html", "md", "svg", "csv"].includes(a.kind) ? `<div class="seg" role="group"><button type="button" aria-pressed="${!code}" data-act="artTab" data-arg="preview">Preview</button><button type="button" aria-pressed="${code}" data-act="artTab" data-arg="code">Code</button></div>` : "";
+  return `<aside class="art-panel" aria-label="File">${head(`${a.label} · Artifact`, a.title)}
+    <div class="row-flex" style="gap:8px;flex-wrap:wrap">${tabs}<span class="xs muted">${esc(a.name)} · ${esc(when(a.updated))}</span></div>
+    <div class="art-body">${body}</div>
+    <div class="btns"><button type="button" class="btn ghost sm" data-act="artCopy">Copy</button><button type="button" class="btn sm" data-act="artDownload">${ic("download", 15)}Download</button><button type="button" class="btn primary sm" data-act="artAsk">Ask for changes</button></div>
+    <p class="xs muted">Pages preview in a sandbox with scripts and network turned off.</p></aside>`;
+}
+
 function chatMsg(m, i, live) {
   const me = m.role === "me";
   const name = me ? ((S.me && S.me.name) || "You").split(" ")[0] : "Max";
@@ -480,7 +522,7 @@ function chatMsg(m, i, live) {
   const status = m.status === "stopped" ? `<p class="xs muted">Stopped.</p>` : m.status === "error" ? `<p class="small" style="color:var(--err)">${esc(m.error || "Max hit an error.")}</p>` : "";
   if (me) return `<div class="mc-msg me"><span class="mc-av me">${esc(initials(name))}</span><div class="mc-body"><div class="mc-meta"><b>${esc(name)}</b><span>${esc(t)}</span></div><div class="bubble">${esc(m.text)}</div><div class="mc-acts" role="toolbar" aria-label="Message actions"><button type="button" class="iconbtn sm" data-act="chatCopy" data-arg="${i}" title="Copy" aria-label="Copy">${ic("copy", 15)}</button></div></div></div>`;
   return `<div class="mc-msg"${live ? ' id="live"' : ""}><span class="mc-av max">${logoMark(30)}</span><div class="mc-body"><div class="mc-meta"><b>Max</b><span class="tag">Hermes</span><span>${esc(t)}</span></div>${chatTools(m.tools)}${
-    live && !m.text ? `<div class="mc-think">${ic("spark", 15)}Working…</div>` : `<div class="md mc-md">${live ? md(m.text).replace(/(<\/(?:p|li|h3)>(?:<\/[uo]l>)?)$/, '<span class="mc-caret"></span>$1') : md(m.text)}</div>`}${status}${
+    live && !m.text ? `<div class="mc-think">${ic("spark", 15)}Working…</div>` : `<div class="md mc-md">${live ? md(m.text).replace(/(<\/(?:p|li|h3)>(?:<\/[uo]l>)?)$/, '<span class="mc-caret"></span>$1') : md(m.text)}</div>`}${chatArts(m.artifacts)}${status}${
     live ? "" : `<div class="mc-acts" role="toolbar" aria-label="Message actions"><button type="button" class="iconbtn sm" data-act="chatCopy" data-arg="${i}" title="Copy" aria-label="Copy">${ic("copy", 15)}</button></div>`}</div></div>`;
 }
 
@@ -496,14 +538,18 @@ async function screenMax(cid) {
     try { conv = await api(`/api/chat/${encodeURIComponent(cid)}`); } catch (e) { toast(e.message); }
   }
   S.chat = conv;
+  try { S.artList = (await api("/api/artifacts")).artifacts; S.artErr = null; } catch (e) { S.artList = null; S.artErr = e.message; }
+  if (S.art && S.art.name !== "*" && (!S.art.data || S.art.stale)) {
+    try { S.art.data = await api(`/api/artifacts/${encodeURIComponent(S.art.name)}`); S.art.stale = false; } catch (e) { S.art.error = e.message; }
+  }
   const busy = S.chatLive && S.chatLive.cid === cid;
   const msgs = conv ? conv.messages.map((m, i) => chatMsg(m, i)).join("") + (busy ? chatMsg(S.chatLive.msg, -1, true) : conv.busy ? chatMsg({ role: "max", text: "", tools: [] }, -1, true) : "") : "";
   const convs = list.chats.map((c) => `<a class="mc-conv${c.id === cid ? " sel" : ""}" href="#max/${esc(c.id)}"><span class="t">${esc(c.title || "New chat")}</span><span class="xs muted">${esc(when(c.updated))}${list.busy.includes(c.id) ? " · answering" : ""}</span></a>`).join("") || `<p class="small muted" style="padding:8px 12px">No chats yet.</p>`;
   const running = busy || (conv && conv.busy);
-  return `<div class="mc-app${cid || fresh ? " has-conv" : ""}"><aside class="mc-side"><div class="mc-side-h"><span class="mc-av max">${logoMark(30)}</span><span style="flex:1;min-width:0"><b>Max</b><span class="xs muted" style="display:block">Same Max as Signal · same approvals</span></span><button type="button" class="btn ghost" data-act="newChat" aria-label="New chat" title="New chat">${ic("plus")}</button></div>
+  return `<div class="mc-app${cid || fresh ? " has-conv" : ""}${S.art ? " art-open" : ""}"><aside class="mc-side"><div class="mc-side-h"><span class="mc-av max">${logoMark(30)}</span><span style="flex:1;min-width:0"><b>Max</b><span class="xs muted" style="display:block">Same Max as Signal · same approvals</span></span><button type="button" class="btn ghost" data-act="newChat" aria-label="New chat" title="New chat">${ic("plus")}</button></div>
     <nav class="mc-convs" aria-label="Chats">${convs}</nav></aside>
     <section class="mc-main" aria-label="Chat">
-      <header class="mc-bar"><a class="iconbtn mc-back" href="#max" aria-label="All chats">${ic("back")}</a><b class="mc-title">${esc((conv && conv.title) || "New chat")}</b><span class="spacer"></span>${conv ? `<button type="button" class="btn ghost sm" data-act="chatDelete" data-arg="${esc(conv.id)}" title="Delete this chat"${running ? " disabled" : ""}>${ic("trash", 15)}<span class="lbl">Delete</span></button>` : ""}</header>
+      <header class="mc-bar"><a class="iconbtn mc-back" href="#max" aria-label="All chats">${ic("back")}</a><b class="mc-title">${esc((conv && conv.title) || "New chat")}</b><span class="spacer"></span><button type="button" class="btn ghost sm" data-act="artOpen" data-arg="*" title="Files Max has made">${ic("file", 15)}<span class="lbl">Files</span></button>${conv ? `<button type="button" class="btn ghost sm" data-act="chatDelete" data-arg="${esc(conv.id)}" title="Delete this chat"${running ? " disabled" : ""}>${ic("trash", 15)}<span class="lbl">Delete</span></button>` : ""}</header>
       <div class="mc-scroll" id="mc-scroll"><div class="mc-col" id="transcript" aria-live="polite">${conv && conv.messages.length ? msgs : `<div class="mc-empty">${logoMark(40)}<h2>How can Max help?</h2><p class="small muted">This is the same Max as on Signal, with the same sandbox and approvals. Emails still need your fingerprint.</p></div>`}</div></div>
       <div class="mc-dock"><div class="mc-col"><div class="composer mc-composer lh">
         <label class="sr" for="max-in">Message Max</label>
@@ -513,7 +559,7 @@ async function screenMax(cid) {
             ? `<button type="button" class="btn sm" data-act="chatStop" data-arg="${esc(cid || "")}">${ic("stop", 15)}Stop</button>`
             : `<span class="mca-send"><button type="button" class="btn primary sm" data-act="chatSend" aria-label="Send" title="Send">${ic("send", 16)}</button></span>`}</div></div>
       </div><p class="mc-hint xs muted">Chats are kept on your server. Max can't send email without your fingerprint.</p></div></div>
-    </section></div>`;
+    </section>${artPanel()}</div>`;
 }
 
 function chatScroll() {
@@ -582,6 +628,7 @@ async function chatSend() {
         if (ev.type === "text") live.text += ev.delta;
         else if (ev.type === "tool") { const t = { name: ev.name, args: ev.args, result: null }; byId[ev.id] = t; live.tools.push(t); }
         else if (ev.type === "tool_done" && byId[ev.id]) byId[ev.id].result = ev.result;
+        else if (ev.type === "artifacts") { live.artifacts = ev.names; if (S.art && ev.names.includes(S.art.name)) S.art.stale = true; try { S.artList = (await api("/api/artifacts")).artifacts; } catch (_) { /* list stays */ } }
         else if (ev.type === "end" && ev.status === "error") toast(ev.message || "Max hit an error.");
         paintLive();
       }
@@ -623,6 +670,29 @@ async function act(name, arg, el) {
     if (name === "createTask") return openCreateTask();
     if (name === "newChat") { S.chatDraft = ""; location.hash = "max/new"; setTimeout(() => { const b = $("#max-in"); if (b) b.focus(); }, 50); return; }
     if (name === "chatSend") return chatSend();
+    if (name === "artOpen") { S.art = { name: arg, tab: "preview" }; return render(); }
+    if (name === "artClose") { S.art = null; return render(); }
+    if (name === "artTab") { if (S.art) S.art.tab = arg; return render(); }
+    if (name === "artCopy") { const a = S.art && S.art.data; if (a) { await navigator.clipboard.writeText(a.text); toast("Copied."); } return; }
+    if (name === "artDownload") {
+      const a = S.art && S.art.data;
+      if (!a) return;
+      const url = URL.createObjectURL(new Blob([a.text], { type: "text/plain" }));
+      const link = document.createElement("a");
+      link.href = url; link.download = a.name; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return;
+    }
+    if (name === "artAsk") {
+      const a = S.art && S.art.data;
+      if (!a) return;
+      S.chatDraft = `About ${a.name}: `;
+      if (matchMedia("(max-width:1279px)").matches) S.art = null;
+      await render();
+      const b = $("#max-in");
+      if (b) { b.focus(); b.setSelectionRange(b.value.length, b.value.length); }
+      return;
+    }
     if (name === "chatStop") { busy(true); await api(`/api/chat/${encodeURIComponent(arg)}/stop`, { body: {} }); return; }
     if (name === "chatCopy") {
       const m = S.chat && S.chat.messages[Number(arg)];
