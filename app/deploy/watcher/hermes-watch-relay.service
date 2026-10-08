@@ -1,0 +1,14 @@
+[Unit]
+Description=Hermes page watcher relay (poll changedetection, summarise, Signal)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=watch
+EnvironmentFile=/etc/hermes-watch/relay.env
+ExecStart=/usr/bin/python3 -I /srv/watch/relay.py poll
+TimeoutStartSec=600
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hermes-watch
+PrivateTmp=yes
