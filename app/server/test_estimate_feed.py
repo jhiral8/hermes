@@ -6,7 +6,7 @@ from pathlib import Path
 
 import estimate_feed as ef
 
-MODULE = Path("/mnt/project-files/health/estimator")
+MODULE = Path(__file__).resolve().parent / "estimator"
 
 
 def days(n=30, start=datetime.date(2026, 9, 1)):

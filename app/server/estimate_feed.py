@@ -9,8 +9,8 @@ records, one per calendar day, in the estimator's own format:
 Output: the small JSON that health.py's estimate() reads. Only the estimate
 and the trend leave this script: no day records, no food names.
 
-The estimator itself is Craig's expenditure code (health/estimator), passed
-in by directory so the server runs the same file that was tested.
+The estimator is Craig's expenditure code, copied into estimator/ in this app
+so the server runs the same tested file.
 """
 
 import argparse
@@ -58,7 +58,8 @@ def write_atomic(path, obj):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days", required=True, help="the day feed (JSON list)")
-    ap.add_argument("--module-dir", required=True, help="folder holding estimator.py")
+    ap.add_argument("--module-dir", default=str(Path(__file__).resolve().parent / "estimator"),
+                    help="folder holding estimator.py (defaults to the copy in this app)")
     ap.add_argument("--out", required=True, help="where to write the estimate JSON")
     args = ap.parse_args(argv)
     days = json.loads(Path(args.days).read_text(encoding="utf-8"))
