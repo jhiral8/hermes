@@ -130,18 +130,22 @@ def _kcal_of(items):
     return round(total, 1) if seen else None
 
 
+LB_TO_KG = 0.45359237
+
+
 def _weight_of(body_stats):
+    """Weight in kg from one day's body_stats. NutriTrace writes "weight" with a
+    "weight_unit" of kg (the default) or lb."""
     try:
         stats = json.loads(body_stats) if isinstance(body_stats, str) else (body_stats or {})
     except ValueError:
         return None
     if not isinstance(stats, dict):
         return None
-    for k in ("weight", "weight_kg"):
-        v = stats.get(k)
-        if isinstance(v, (int, float)):
-            return float(v)
-    return None
+    v = stats.get("weight")
+    if not isinstance(v, (int, float)):
+        return None
+    return float(v) * LB_TO_KG if stats.get("weight_unit") == "lb" else float(v)
 
 
 def read_nutritrace_db(path, start, end):
@@ -168,7 +172,7 @@ def read_nutritrace_db(path, start, end):
             if w is not None:
                 weights[date] = w
         for date, value in con.execute(
-                "SELECT date, value FROM wellness_data WHERE metric_type IN ('weight', 'body_weight') "
+                "SELECT date, value FROM wellness_data WHERE metric_type = 'weight_kg' "
                 "AND date BETWEEN ? AND ? ORDER BY synced_at", bounds):
             if isinstance(value, (int, float)):
                 weights[date] = float(value)  # the later sync wins

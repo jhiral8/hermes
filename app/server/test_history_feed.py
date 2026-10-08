@@ -158,9 +158,10 @@ class NutriTraceDb(unittest.TestCase):
                    ("b", "2026-10-03", json.dumps([]), json.dumps({"weight": 81.2}), None),
                    ("c", "2026-10-04", "not json", None, None),
                    ("d", "2026-10-05", json.dumps([{"nutrition": {"calories": 900}}]), None, "2026-10-05")],
-            wellness=[("w1", "2026-10-03", "weight", 80.9, "2026-10-03T07:00"),
-                      ("w2", "2026-10-03", "weight", 80.7, "2026-10-03T08:00"),
-                      ("w3", "2026-10-04", "steps", 9000, "2026-10-04T08:00")])
+            wellness=[("w1", "2026-10-03", "weight_kg", 80.9, "2026-10-03T07:00"),
+                      ("w2", "2026-10-03", "weight_kg", 80.7, "2026-10-03T08:00"),
+                      ("w3", "2026-10-04", "steps", 9000, "2026-10-04T08:00"),
+                      ("w4", "2026-10-05", "weight", 70.0, "2026-10-05T08:00")])
         days, weights = hf.read_nutritrace_db(p, D(2026, 10, 1), D(2026, 10, 8))
         self.assertEqual(days["2026-10-02"], {"kcal": 420.5, "items": 3})
         self.assertEqual(days["2026-10-03"], {"kcal": None, "items": 0})
@@ -168,6 +169,12 @@ class NutriTraceDb(unittest.TestCase):
         self.assertNotIn("2026-10-05", days)  # deleted
         self.assertEqual(weights["2026-10-03"], 80.7)  # the later sync wins over body stats
         self.assertNotIn("2026-10-04", weights)  # steps are not weight
+        self.assertNotIn("2026-10-05", weights)  # only NutriTrace's weight_kg metric counts
+
+    def test_body_stats_weight_is_converted_from_lb(self):
+        self.assertAlmostEqual(hf._weight_of(json.dumps({"weight": 180, "weight_unit": "lb"})), 81.646, places=2)
+        self.assertEqual(hf._weight_of(json.dumps({"weight": 81.2, "weight_unit": "kg"})), 81.2)
+        self.assertEqual(hf._weight_of(json.dumps({"weight": 81.2})), 81.2)  # kg is the default
 
     def test_opened_read_only(self):
         import sqlite3
@@ -185,7 +192,7 @@ class NutriTraceDb(unittest.TestCase):
         export = make_export(days, {D(2026, 9, 28): 84.0})
         p = make_nutritrace_db(
             diary=[("a", "2026-10-01", json.dumps([{"nutrition": {"calories": 1500}}]), None, None)],
-            wellness=[("w", "2026-10-02", "weight", 83.4, "2026-10-02T07:00")])
+            wellness=[("w", "2026-10-02", "weight_kg", 83.4, "2026-10-02T07:00")])
         hf.run(str(export), None, None, str(d / "days.json"), str(d / "estimator.json"),
                today=D(2026, 10, 3), fetch=lambda *a: {}, nutritrace_db=str(p))
         feed = {r["date"]: r for r in json.loads((d / "days.json").read_text())}
