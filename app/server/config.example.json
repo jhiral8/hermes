@@ -126,6 +126,11 @@
     "token_file": "/etc/hermes-app/inbox/gmail-real.token",
     "timeout": 8
   },
+  "planner": {
+    "token_file": "/etc/hermes-app/planner/calendar.token",
+    "calendars": ["primary"],
+    "timeout": 8
+  },
   "foods": {
     "off_enabled": false,
     "timeout": 6,

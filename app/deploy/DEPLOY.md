@@ -217,6 +217,31 @@ sending from the test mailbox only.
 Mail is never written to disk or cached; the browser keeps it in memory only,
 and the browser never stores it in localStorage.
 
+## Phase 5: Planner (Google Calendar, read-only)
+
+Craig's calendar, shown only to him in the app. The app only lists events:
+nothing here can create, change or delete them, and nothing goes to Max or any
+model. Events are never written to disk.
+
+1. In the hermes-broker Google project, turn on the Google Calendar API.
+2. Sign in once with the `calendar.readonly` scope only (a separate sign-in from
+   Gmail, so the Inbox token is untouched). Save a JSON file at
+   `/etc/hermes-app/planner/calendar.token` with keys `client_id`,
+   `client_secret` and `refresh_token`. Owner root, group hermes-app, mode 0640.
+3. Max's sandbox must not be able to read `/etc/hermes-app/planner`. Check from
+   inside the sandbox, then remove the test file.
+4. The app's outbound rule allows Google only. Check it reaches
+   `www.googleapis.com` (the Calendar API host) as well as `gmail.googleapis.com`.
+5. Add the `planner` block from `config.example.json` to the live config.
+   `calendars` lists the calendar ids to show; `primary` is Craig's main one.
+   Restart hermes-app only.
+6. Test: `GET /api/planner` with the login header returns this week's days.
+   With no token file, it says "Google Calendar sign-in isn't set up yet".
+
+If the hermes-broker consent screen is still in Testing mode, Google expires its
+refresh tokens after 7 days, for Gmail and Calendar alike. Check the mode before
+relying on either.
+
 ## Phase 4 tiles: Expenditure and weight (day feed from the MacroFactor export)
 
 The steps are in `app/deploy/macrofactor/HISTORY.md`. The tiles read

@@ -102,7 +102,7 @@ const NAV = [
   { h: "today", i: "today", t: "Today" },
   { h: "health/food", i: "health", t: "Health" },
   { h: "inbox", i: "inbox", t: "Inbox" },
-  { h: "soon/planner", i: "planner", t: "Planner", soon: 5 },
+  { h: "planner", i: "planner", t: "Planner" },
   { label: "Assistant & agents" },
   { h: "max", i: "max", t: "Max" },
   { h: "work", i: "work", t: "Work" },
@@ -136,7 +136,7 @@ function renderShell(route) {
     }).join("")}</nav>
     <div class="side-foot"><div class="acct"><span class="avatar">${esc(initials(me.name || "Craig"))}</span><span class="who"><b style="display:block;font-size:13.5px;font-weight:600">${esc((me.name || "Craig").split(" ")[0])}</b><span class="xs muted">Owner · ${esc(me.login || "signed in through Tailscale")}</span></span></div></div>`;
 
-  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", more: "More", soon: "Coming next" }[area] || "Hermes";
+  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", planner: "Planner", more: "More", soon: "Coming next" }[area] || "Hermes";
   $("#top").innerHTML = `
     <a href="#today" class="phone-only" aria-label="Hermes home" style="display:flex">${logoMark(26)}</a>
     <div class="crumb"><span class="cur">${esc(title)}</span></div>
@@ -415,7 +415,7 @@ async function screenSystem(tab) {
 }
 
 function screenMore() {
-  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"]];
+  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"], ["inbox", "inbox", "Inbox", "Your mail, read-only"], ["planner", "planner", "Planner", "Your calendar, read-only"]];
   return `<div class="ph"><div class="ph-t"><h1>More</h1></div></div><section class="panel"><div class="list">${items.map(([h, i, t, s]) => `<a class="li" href="#${h}"><span class="main"><span class="t">${ic(i, 16)} ${t}</span><span class="s">${s}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div></section>`;
 }
 
@@ -1242,6 +1242,36 @@ async function screenInbox(rest) {
   return head() + tabs + `<section class="panel"><div class="list">${rows || `<p class="small muted">Nothing here.</p>`}</div></section>`;
 }
 
+/* ---------- Planner (Phase 5): Craig's Google Calendar, read-only ----------
+   Shown only to Craig. Events are kept in memory only, and nothing here goes
+   to Max or any model. Changes are made in Google Calendar itself. */
+
+const londonToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+
+function planEvent(e) {
+  const time = e.all_day ? "All day" : `${esc((e.start || "").slice(11, 16))}${e.end ? "–" + esc(e.end.slice(11, 16)) : ""}`;
+  return `<div class="li"><span class="main"><span class="t">${esc(e.title)}</span>${e.location ? `<span class="s">${esc(e.location)}</span>` : ""}</span>
+    <span class="end small muted">${time}</span></div>`;
+}
+
+async function screenPlanner(rest) {
+  const week = Math.max(-4, Math.min(12, parseInt(rest[0] || "0", 10) || 0));
+  const head = `<div class="ph"><div class="ph-t"><h1>Planner</h1><p class="sub">Your calendar, shown to you only. It never goes to Max or any model.</p></div></div>`;
+  const label = week === 0 ? "This week" : week === 1 ? "Next week" : week === -1 ? "Last week" : null;
+  const start = shiftDay(londonToday(), 7 * week);
+  const d = await inboxApi(`/api/planner?start=${start}&days=7`);
+  const nav = `<div class="btns" style="margin-bottom:12px;align-items:center">
+    <a class="btn ghost sm" href="#planner/${week - 1}" aria-label="Previous week">${ic("back", 14)}</a>
+    <b style="min-width:9em;text-align:center">${esc(label || `${dayName(start)} on`)}</b>
+    <a class="btn ghost sm" href="#planner/${week + 1}" aria-label="Next week">${ic("chev", 14)}</a>
+    ${week ? `<a class="btn ghost sm" href="#planner">Today</a>` : ""}</div>`;
+  if (!d.ok) return head + nav + notConnected("Google Calendar", d.error);
+  const today = londonToday();
+  const days = d.days.map((day) => `<section class="panel"><div class="panel-h"><h2>${esc(day.date === today ? "Today, " + dayName(day.date) : dayName(day.date))}</h2></div>
+    <div class="list">${day.events.map(planEvent).join("") || `<p class="small muted">Nothing on.</p>`}</div></section>`).join("");
+  return head + nav + `<div class="stack s24">${days}</div>`;
+}
+
 /* ---------- router ---------- */
 
 let renderSeq = 0;
@@ -1263,6 +1293,7 @@ async function render() {
   else if (area === "soon") html = screenSoon(rest[0]);
   else if (area === "health") html = await screenHealth(rest);
   else if (area === "inbox") html = await screenInbox(rest);
+  else if (area === "planner") html = await screenPlanner(rest);
   else html = await screenToday();
   if (seq !== renderSeq) return; // a newer render started
   if (!S.cache.approvals && area !== "approvals") load("approvals", "/api/approvals").then(() => renderShell(route));

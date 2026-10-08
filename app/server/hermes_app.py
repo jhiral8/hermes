@@ -37,10 +37,11 @@ from demo import Demo
 from health import Health
 import demo_health
 from inbox import Gmail, SampleMail
+from planner import Calendar, SampleCalendar
 import foods as food_lookup
 from foods import Foods, Lookup, SavedFoods
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 STREAMED = object()  # a handler already wrote the response
 HERE = Path(__file__).resolve().parent
 DEFAULT_WEB = HERE.parent / "web"
@@ -272,6 +273,14 @@ def make_inbox(cfg, app):
     return Gmail(ic) if ic else None
 
 
+def make_planner(cfg, app):
+    """Craig's Google Calendar, read-only, if signed in (a sample week in sample-data mode)."""
+    if app.demo:
+        return SampleCalendar(today=_today_london)
+    pc = cfg.get("planner")
+    return Calendar(pc) if pc else None
+
+
 def make_foods(cfg, app):
     """Barcode lookup and saved foods for the Food screen (sample data in sample-data mode)."""
     if app.demo:
@@ -286,7 +295,7 @@ def _today_london():
     return Health({}).today()
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None):
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -301,6 +310,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         inbox = make_inbox(cfg, app)
     if foods is None:
         foods = make_foods(cfg, app)
+    if planner is None:
+        planner = make_planner(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -368,6 +379,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._chat_get(path[len("/api/chat"):].strip("/"))
             elif path == "/api/inbox" or path.startswith("/api/inbox/"):
                 self._inbox_get(path[len("/api/inbox"):].strip("/"))
+            elif path == "/api/planner":
+                self._planner_get()
             elif path == "/api/health/foods" or path.startswith("/api/health/barcode/"):
                 self._foods_get(path[len("/api/health/"):])
             elif path.startswith("/api/health/"):
@@ -483,6 +496,22 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._json(503, {"ok": False, "error": str(e), **app.meta()})
                 return
             # Mail is never written to disk or cached; the browser keeps it in memory.
+            self._json(200, {"ok": True, **out, **app.meta()})
+
+        def _planner_get(self):
+            if planner is None:
+                self._json(503, {"ok": False, "error": "Google Calendar isn't signed in on the server yet.", **app.meta()})
+                return
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                out = planner.week(start=(q.get("start") or [None])[0], days=(q.get("days") or [7])[0])
+            except ValueError as e:
+                self._json(400, {"ok": False, "error": str(e)})
+                return
+            except SourceError as e:
+                self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                return
+            # Events are never written to disk or cached.
             self._json(200, {"ok": True, **out, **app.meta()})
 
         def _health_get(self, what):
@@ -617,7 +646,8 @@ def main(argv=None):
     artifacts = make_artifacts(cfg, app)
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
                               make_handler(cfg, args.web, cache, app, make_chat(cfg, app, artifacts), artifacts,
-                                           make_health(cfg, app), make_inbox(cfg, app), make_foods(cfg, app)))
+                                           make_health(cfg, app), make_inbox(cfg, app), make_foods(cfg, app),
+                                           make_planner(cfg, app)))
     print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
           f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()
