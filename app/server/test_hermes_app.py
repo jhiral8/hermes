@@ -65,6 +65,18 @@ class Checks(unittest.TestCase):
             raise FileNotFoundError
         self.assertEqual(h.check_systemd({"unit": "x"}, runner=boom)[0], h.UNKNOWN)
 
+    def test_last_run(self):
+        def fake(out):
+            return lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=out, stderr="")
+        now = 1760000000
+        ok = f"Result=success\nExecMainExitTimestamp=@{now - 7200}\nExecMainStatus=0\n"
+        self.assertEqual(h.check_last_run({"unit": "b"}, runner=fake(ok), now=now), (h.OK, "last run 2h ago"))
+        self.assertEqual(h.check_last_run({"unit": "b"}, runner=fake(ok), now=now + 30 * 3600)[0], h.DOWN)
+        bad = f"Result=exit-code\nExecMainExitTimestamp=@{now - 60}\nExecMainStatus=1\n"
+        self.assertEqual(h.check_last_run({"unit": "b"}, runner=fake(bad), now=now)[0], h.DOWN)
+        never = "Result=success\nExecMainExitTimestamp=\nExecMainStatus=0\n"
+        self.assertEqual(h.check_last_run({"unit": "b"}, runner=fake(never), now=now)[0], h.UNKNOWN)
+
     def test_file_age(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(h.check_file_age({"dir": d})[0], h.DOWN)

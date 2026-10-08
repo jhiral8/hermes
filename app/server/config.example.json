@@ -10,29 +10,29 @@
       "id": "max",
       "name": "Max (Hermes Agent)",
       "group": "Agents",
-      "kind": "systemd",
-      "unit": "REPLACE-hermes-unit"
+      "kind": "http",
+      "url": "http://127.0.0.1:8642/health"
     },
     {
       "id": "paperclip",
       "name": "Paperclip board",
       "group": "Agents",
       "kind": "http",
-      "url": "http://127.0.0.1:REPLACE/"
+      "url": "http://127.0.0.1:3100/"
     },
     {
       "id": "broker",
       "name": "Approval broker",
       "group": "Safety",
       "kind": "http",
-      "url": "http://127.0.0.1:REPLACE/"
+      "url": "http://127.0.0.1:787/"
     },
     {
       "id": "kill",
       "name": "Kill switch",
       "group": "Safety",
       "kind": "flag",
-      "path": "REPLACE-kill-switch-flag-file",
+      "path": "/etc/hermes-paused",
       "on_text": "agents stopped",
       "off_text": "not pulled",
       "labels": {
@@ -65,41 +65,34 @@
       "id": "salt",
       "name": "salt.md notes",
       "group": "Notes",
-      "kind": "http",
-      "url": "http://127.0.0.1:REPLACE/"
+      "kind": "systemd",
+      "unit": "salt.service"
     },
     {
       "id": "backup",
       "name": "Nightly backup",
       "group": "Safety",
-      "kind": "file_age",
-      "dir": "REPLACE-backup-log-dir",
-      "glob": "*",
+      "kind": "last_run",
+      "unit": "hermes-backup.service",
       "max_age_hours": 26
     }
   ],
   "audit_log": "/var/lib/hermes-app/actions.log",
   "paperclip": {
-    "url": "http://127.0.0.1:REPLACE",
-    "company_id": "REPLACE",
+    "url": "http://127.0.0.1:3100",
+    "company_name": "Jhiral",
     "key_file": "/etc/hermes-app/paperclip.key",
     "web_url": "https://hermes-oracle.tail4abc29.ts.net:8444"
   },
   "broker": {
-    "sqlite_path": "REPLACE-broker-db",
-    "pending_sql": "REPLACE: select ... as id, ... as title, ... as recipients, ... as status, ... as requested, ... as expires from ... where pending",
-    "history_sql": "REPLACE: same columns plus ... as decided, newest 30",
+    "feed_path": "/var/lib/hermes-app-feed/broker.json",
     "review_url": "https://hermes-oracle.tail4abc29.ts.net/"
   },
   "cost_file": {
-    "path": "REPLACE-cost-monitor-json",
-    "label": "Max on OpenRouter",
-    "fields": {
-      "today_usd": "REPLACE",
-      "month_usd": "REPLACE",
-      "month_cap_usd": "REPLACE",
-      "balance_usd": "REPLACE"
-    }
+    "csv_path": "/var/lib/hermes-cost/balance.csv",
+    "provider": "openrouter",
+    "month_cap_usd": 10,
+    "label": "Max on OpenRouter"
   },
   "stop": {
     "request_file": "/var/lib/hermes-app/stop-request"

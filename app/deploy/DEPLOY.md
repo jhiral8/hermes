@@ -65,21 +65,31 @@ action is logged to `/var/lib/hermes-app/actions.log`.
 1. Update the code: `cd /opt/hermes-app && sudo git fetch && sudo git checkout <branch> && sudo git pull`.
 2. Reinstall the unit (it now has a state folder for the audit log):
    `sudo cp app/deploy/hermes-app.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
-3. Paperclip: create a board API key for the app (Craig's board, named
-   "Hermes app") and save it to `/etc/hermes-app/paperclip.key`, owner
-   `root:hermes-app`, mode `640`. Never paste it in chat. Fill `paperclip` in the
-   config: the loopback URL, the company id, and `web_url` (the board address
-   Craig opens).
-4. Broker: fill `broker` with the path to its SQLite file and two SELECT
-   queries whose columns are aliased to `id, title, detail, recipients,
-   status, requested, expires, decided`. The app opens the file read-only. If
-   hermes-app can't read the file, add hermes-app to the file's group rather
-   than widening its permissions. `review_url` is the page Craig approves on.
-5. Cost monitor: point `cost_file` at the JSON file the hourly script writes,
-   and map `today_usd`, `month_usd`, `month_cap_usd` and `balance_usd` to its
-   keys (dotted paths work). Leave out any it doesn't have.
-6. Backup tile: point the `backup` service at the folder holding the nightly
-   backup's last-success file, readable by hermes-app.
+3. Paperclip (v2026.1005.0, container orch-board-1, 127.0.0.1:3100): create a
+   board API key for the app (Craig's board, named "Hermes app"), the same way
+   the existing board key was made, and save it to
+   `/etc/hermes-app/paperclip.key`, owner `root:hermes-app`, mode `640`. Never
+   paste it in chat. The config finds the company by name (`"company_name":
+   "Jhiral"`), so its id isn't needed.
+4. Broker: its database is owner-only and holds full email payloads, so the app
+   doesn't read it. A broker-run exporter copies only subject, recipients,
+   status and times into a feed file the app can read:
+   - Check the payload's key names for subject and recipients (key names only:
+     `sqlite3 -readonly broker.db "select distinct j.key from requests, json_each(payload) j"`)
+     and the status words (`select distinct status from requests`). Adjust
+     `app/server/broker-export.example.json` to match and save it as
+     `/etc/hermes-app/broker-export.json` (root, 644).
+   - `sudo cp app/deploy/hermes-app-broker-export.service app/deploy/hermes-app-broker-export.timer /etc/systemd/system/`
+   - `sudo systemctl daemon-reload && sudo systemctl enable --now hermes-app-broker-export.timer`
+   - Check: `sudo systemctl start hermes-app-broker-export.service` prints
+     "exported N pending", and `/var/lib/hermes-app-feed/broker.json` exists.
+5. Cost: the app reads `/var/lib/hermes-cost/balance.csv` (provider
+   `openrouter`; spend is the rise in `used` between checks). Set
+   `month_cap_usd` from `/etc/hermes-cost/config.json`. If hermes-app can't
+   read the CSV, give it read on that one file (`setfacl -m u:hermes-app:r`,
+   plus `x` on the folder); it holds only balances.
+6. Backup tile: kind `last_run` on `hermes-backup.service`. It asks
+   `systemctl show` for the last run's result and time; no new permissions.
 7. `sudo systemctl restart hermes-app` and check `/api/today` with the login
    header: each section should say `"ok": true`.
 

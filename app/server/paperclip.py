@@ -48,7 +48,10 @@ def _as_list(body, *keys):
 class Paperclip:
     def __init__(self, cfg, opener=None):
         self.base = cfg["url"].rstrip("/")
-        self.company = cfg["company_id"]
+        self.company = cfg.get("company_id")
+        self.company_name = cfg.get("company_name")
+        if not (self.company or self.company_name):
+            raise KeyError("company_id or company_name")
         self.key_file = cfg.get("key_file")
         self.timeout = float(cfg.get("timeout", 5))
         self.web_url = cfg.get("web_url")  # Craig-facing board address
@@ -88,6 +91,15 @@ class Paperclip:
             raise PaperclipError("Paperclip sent something that isn't JSON")
 
     def _co(self, path):
+        if not self.company:
+            # Look the company up by name once; the id is stable after that.
+            want = self.company_name.strip().lower()
+            for c in _as_list(self._call("GET", "/companies"), "companies"):
+                if str(c.get("name") or "").strip().lower() == want:
+                    self.company = c.get("id")
+                    break
+            else:
+                raise PaperclipError(f"no company named {self.company_name} on the board")
         return f"/companies/{self.company}{path}"
 
     # ------------------------------------------------------------ reads

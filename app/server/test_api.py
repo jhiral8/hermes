@@ -110,6 +110,61 @@ class Sources(unittest.TestCase):
             bad.pending()  # read-only connection refuses writes
         self.assertEqual(len(b.pending()), 1)
 
+    def test_broker_export_and_feed(self):
+        import broker_export, time as _t
+        d = tempfile.mkdtemp()
+        db = Path(d, "broker.db")
+        con = sqlite3.connect(db)
+        con.execute("create table requests (id text primary key, created real, payload text, status text, updated real)")
+        con.execute("insert into requests values ('r1', 1760000000, ?, 'pending', 1760000000)",
+                    (json.dumps({"subject": "Hi", "to": ["a@b.c", "d@e.f"], "body": "secret"}),))
+        con.execute("insert into requests values ('r0', 1759990000, '{}', 'sent', 1759990100)")
+        con.commit()
+        con.close()
+        cfg = json.loads(Path(__file__).with_name("broker-export.example.json").read_text())
+        cfg.update(sqlite_path=str(db), out=str(Path(d, "feed.json")))
+        broker_export.export(cfg)
+        raw = Path(d, "feed.json").read_text()
+        self.assertNotIn("secret", raw)  # only the shown columns leave the broker
+        b = Broker({"feed_path": cfg["out"]})
+        p = b.pending()
+        self.assertEqual((p[0]["id"], p[0]["title"], p[0]["recipients"]), ("r1", "Hi", "a@b.c, d@e.f"))
+        self.assertEqual(p[0]["expires"], "2025-10-09T09:03:20Z")  # created + 10 min
+        h = b.history()
+        self.assertEqual((h[0]["title"], h[0]["status"]), ("Email send", "sent"))
+        with self.assertRaises(SourceError):
+            b._feed("pending", now=_t.time() + 3600)  # stale feed isn't trusted
+
+    def test_cost_csv(self):
+        import datetime as dt
+        d = tempfile.mkdtemp()
+        p = Path(d, "balance.csv")
+        now = dt.datetime(2026, 10, 8, 12, 0, tzinfo=dt.timezone.utc).timestamp()
+        rows = [("epoch", "provider", "remaining", "used"),
+                (now - 40 * 86400, "openrouter", 20, 1.0),   # last month
+                (now - 3 * 86400, "openrouter", 18, 2.0),    # this month: +1.0
+                (now - 3 * 86400, "deepseek", 5, 9.0),       # other provider ignored
+                (now - 3600 * 2, "openrouter", 17.5, 2.5),   # today: +0.5
+                (now - 3600, "openrouter", 19.9, 0.1),       # new key: no negative spend
+                (now - 60, "openrouter", 19.8, 0.2)]         # today: +0.1
+        p.write_text("\n".join(",".join(map(str, r)) for r in rows))
+        c = CostFile({"csv_path": str(p), "provider": "openrouter", "month_cap_usd": 10})
+        out = c.read_csv(now=now)
+        self.assertAlmostEqual(out["today_usd"], 0.6)
+        self.assertAlmostEqual(out["month_usd"], 1.6)
+        self.assertEqual((out["balance_usd"], out["month_cap_usd"]), (19.8, 10))
+        with self.assertRaises(SourceError):
+            CostFile({"csv_path": d + "/none.csv"}).read()
+
+    def test_company_found_by_name(self):
+        d = tempfile.mkdtemp()
+        op = FakeOpener({("GET", "/companies"): [{"id": "x", "name": "Other"}, {"id": "co9", "name": "Jhiral"}],
+                         ("GET", "/companies/co9/agents"): []})
+        pc = Paperclip({"url": "http://127.0.0.1:3100", "company_name": "jhiral"}, opener=op)
+        self.assertEqual(pc.agents(), [])
+        pc.agents()
+        self.assertEqual([c[1] for c in op.calls], ["/companies", "/companies/co9/agents", "/companies/co9/agents"])
+
     def test_cost_file_mapping(self):
         d = tempfile.mkdtemp()
         p = Path(d, "cost.json")

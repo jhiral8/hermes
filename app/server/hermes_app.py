@@ -103,6 +103,32 @@ def check_systemd(svc, runner=subprocess.run):
     return UNKNOWN, state or "no answer"
 
 
+def check_last_run(svc, runner=subprocess.run, now=None):
+    """For a timer-run job: Up if its last run succeeded recently enough.
+
+    Uses `systemctl show`, which needs no extra permissions (the journal would).
+    After a reboot systemd forgets the last run, so this shows Unknown until
+    the next one.
+    """
+    now = now if now is not None else time.time()
+    cmd = ["systemctl", "show", svc["unit"], "--timestamp=unix",
+           "-p", "Result", "-p", "ExecMainExitTimestamp", "-p", "ExecMainStatus"]
+    try:
+        out = runner(cmd, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        return UNKNOWN, f"can't ask systemd ({type(e).__name__})"
+    props = dict(line.split("=", 1) for line in (out.stdout or "").splitlines() if "=" in line)
+    stamp = props.get("ExecMainExitTimestamp", "").lstrip("@")
+    if not stamp.replace(".", "", 1).isdigit():
+        return UNKNOWN, "no run since the server restarted"
+    age_h = (now - float(stamp)) / 3600
+    if props.get("Result") != "success" or props.get("ExecMainStatus", "0") != "0":
+        return DOWN, f"last run failed ({props.get('Result', '?')}), {age_h:.0f}h ago"
+    if age_h > float(svc.get("max_age_hours", 26)):
+        return DOWN, f"last run {age_h:.0f}h ago"
+    return OK, f"last run {age_h:.0f}h ago" if age_h >= 1 else "ran within the hour"
+
+
 def check_file_age(svc, now=None):
     """Up if the newest file matching `glob` in `dir` is recent enough."""
     now = now if now is not None else time.time()
@@ -138,6 +164,7 @@ CHECKS = {
     "http": check_http,
     "systemd": check_systemd,
     "file_age": check_file_age,
+    "last_run": check_last_run,
     "flag": check_flag,
 }
 
