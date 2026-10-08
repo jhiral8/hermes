@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Builds the expenditure estimator's day feed from MacroFactor history and NutriTrace.
 
-The export history comes from export_history.py (MacroFactor's .xlsx, saved as JSON
-once, so the app never needs the spreadsheet library). For each day from the first
+The MacroFactor history is read straight from MacroFactor's .xlsx export on the
+server (openpyxl). Partly logged days, and the export's own last day, are marked
+partial. For each day from the first
 MacroFactor day up to today, the feed takes:
   - NutriTrace's totals, when NutriTrace has logged anything that day (NutriTrace wins);
   - otherwise MacroFactor's total for the day, marked complete or partial as exported;
@@ -13,8 +14,8 @@ history, so new weigh-ins won't show until they can.
 Then the estimator runs on that feed and writes the same small estimate file the
 app already reads. Health data stays on this server: nothing here goes to Max or a model.
 
-Usage (nightly, after the MacroFactor export is refreshed):
-  python3 history_feed.py --history /var/lib/hermes-app/macrofactor-history.json \
+Usage (nightly):
+  python3 history_feed.py --history /home/health/imports/macrofactor/MacroFactor-20261007134323.xlsx \
       --nutritrace-url http://127.0.0.1:3001 --key-file /etc/hermes-app/health/nutritrace.key \
       --days-out /var/lib/hermes-app-feed/health-days.json \
       --estimator-out /var/lib/hermes-app-feed/estimator.json
@@ -27,9 +28,45 @@ import sys
 import time
 from pathlib import Path
 
+import openpyxl
+
 import estimate_feed
 from health import TraceApp, nutrients
 from sources import SourceError
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def read_export(path):
+    """MacroFactor's own history from the .xlsx: ({date: {kcal, status}}, {date: kg}).
+
+    Days marked "Partial Logging", and the export's last day, are partial. Days
+    with no total are left out. Read-only.
+    """
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    rows = lambda name: list(wb[name].iter_rows(values_only=True))[1:]
+    totals = {}
+    for r in rows("Calories & Macros"):
+        if isinstance(r[0], datetime.datetime) and _num(r[1]) is not None:
+            totals[r[0].date()] = _num(r[1])
+    partial = set()
+    for r in rows("Partial Logging"):
+        if r[1] == "Yes" and r[0]:
+            partial.add(datetime.datetime.strptime(str(r[0]), "%d/%m/%Y").date())
+    weights = {}
+    for r in rows("Scale Weight"):
+        if isinstance(r[0], datetime.datetime) and _num(r[1]) is not None:
+            weights[r[0].date().isoformat()] = _num(r[1])
+    export_day = max(totals) if totals else None
+    days = {d.isoformat(): {"kcal": totals[d],
+                            "status": "partial" if d in partial or d == export_day else "complete"}
+            for d in totals}
+    return days, weights
 
 
 DEFAULT_MODULE = str(Path(__file__).resolve().parent / "estimator")
@@ -41,11 +78,8 @@ def london_today():
 
 
 def load_history(path):
-    """MacroFactor history: {"days": [{"date", "kcal", "status"}], "weights": {"date": kg}}."""
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    days = {d["date"]: {"kcal": d["kcal"], "status": d["status"]} for d in data.get("days", [])}
-    weights = {k: float(v) for k, v in (data.get("weights") or {}).items()}
-    return days, weights
+    """MacroFactor history from the export: ({date: {kcal, status}}, {date: kg})."""
+    return read_export(path)
 
 
 def build_days(history, nt_days, today):
@@ -98,7 +132,7 @@ def run(history_path, nutritrace_url, key_file, days_out, estimator_out, today=N
     history = load_history(history_path)
     mf_days, _ = history
     if not mf_days:
-        raise SystemExit("The MacroFactor history file has no days.")
+        raise SystemExit("The MacroFactor export has no days.")
     today = today or london_today()
     start = min(datetime.date.fromisoformat(d) for d in mf_days)
     nt_days = fetch(nutritrace_url, key_file, start, today) if nutritrace_url else {}
@@ -116,7 +150,7 @@ def run(history_path, nutritrace_url, key_file, days_out, estimator_out, today=N
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--history", required=True, help="MacroFactor history JSON from export_history.py")
+    ap.add_argument("--history", required=True, help="MacroFactor's .xlsx export (read only)")
     ap.add_argument("--nutritrace-url", default="http://127.0.0.1:3001", help="NutriTrace address; empty to skip")
     ap.add_argument("--key-file", default="/etc/hermes-app/health/nutritrace.key", help="the read-only key")
     ap.add_argument("--days-out", required=True, help="where to write the day feed")

@@ -1,18 +1,51 @@
 import datetime
-import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
+import openpyxl
+
 import history_feed as hf
 from sources import SourceError
+
+
+def make_export(days, weights=None, partial=()):
+    """A small MacroFactor-shaped .xlsx: days is [(date, kcal)], weights {date: kg}."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Calories & Macros"
+    ws.append(["Date", "Calories (kcal)", "Fat (g)", "Carbs (g)", "Protein (g)"])
+    for d, kcal in days:
+        ws.append([datetime.datetime.combine(d, datetime.time()), kcal, 1, 1, 1])
+    p = wb.create_sheet("Partial Logging")
+    p.append(["Date", "Partial"])
+    for d in partial:
+        p.append([d.strftime("%d/%m/%Y"), "Yes"])
+    w = wb.create_sheet("Scale Weight")
+    w.append(["Date", "Weight (kg)", "Fat Percent"])
+    for d, kg in (weights or {}).items():
+        w.append([datetime.datetime.combine(d, datetime.time()), kg, None])
+    path = Path(tempfile.mkdtemp(), "MacroFactor.xlsx")
+    wb.save(path)
+    return path
 
 D = datetime.date
 
 
 def history(days, weights=None):
     return ({d["date"]: {"kcal": d["kcal"], "status": d["status"]} for d in days}, weights or {})
+
+
+class Export(unittest.TestCase):
+    def test_partial_and_last_days_are_marked(self):
+        p = make_export([(D(2026, 10, 1), 2000), (D(2026, 10, 2), 1800), (D(2026, 10, 3), 700)],
+                        {D(2026, 10, 1): 80.0}, partial=[D(2026, 10, 2)])
+        days, weights = hf.read_export(p)
+        self.assertEqual(days["2026-10-01"], {"kcal": 2000.0, "status": "complete"})
+        self.assertEqual(days["2026-10-02"]["status"], "partial")
+        self.assertEqual(days["2026-10-03"]["status"], "partial")  # the export's own last day
+        self.assertEqual(weights, {"2026-10-01": 80.0})
 
 
 class Build(unittest.TestCase):
@@ -77,12 +110,11 @@ class Fetch(unittest.TestCase):
 class Run(unittest.TestCase):
     def test_end_to_end_writes_the_feed_and_the_estimate(self):
         d = Path(tempfile.mkdtemp())
-        hist = d / "history.json"
-        days = [{"date": (D(2026, 9, 1) + datetime.timedelta(days=i)).isoformat(), "kcal": 2200,
-                 "status": "complete"} for i in range(30)]
-        weights = {days[i]["date"]: 85.0 - 0.05 * i for i in range(0, 30, 3)}
-        hist.write_text(json.dumps({"days": days, "weights": weights}))
-        res = hf.run(str(hist), None, None, str(d / "days.json"), str(d / "estimator.json"),
+        base = D(2026, 9, 1)
+        days = [(base + datetime.timedelta(days=i), 2200) for i in range(30)]
+        weights = {base + datetime.timedelta(days=i): 85.0 - 0.05 * i for i in range(0, 30, 3)}
+        export = make_export(days, weights)
+        res = hf.run(str(export), None, None, str(d / "days.json"), str(d / "estimator.json"),
                      today=D(2026, 9, 30), fetch=lambda *a: {})
         self.assertEqual(res["days"], 30)
         feed = json.loads((d / "days.json").read_text())
@@ -93,9 +125,9 @@ class Run(unittest.TestCase):
 
     def test_empty_history_stops(self):
         d = Path(tempfile.mkdtemp())
-        (d / "h.json").write_text(json.dumps({"days": [], "weights": {}}))
+        empty = make_export([])
         with self.assertRaises(SystemExit):
-            hf.run(str(d / "h.json"), None, None, str(d / "a"), str(d / "b"), today=D(2026, 10, 2))
+            hf.run(str(empty), None, None, str(d / "a"), str(d / "b"), today=D(2026, 10, 2))
 
 
 if __name__ == "__main__":
