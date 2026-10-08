@@ -102,7 +102,7 @@ class Screens(unittest.TestCase):
         self.assertEqual(p["nutrition"]["data"]["logged"], len(logged))
         avg = sum(r["kcal"] for r in logged) / len(logged)
         self.assertAlmostEqual(p["nutrition"]["data"]["avg"]["kcal"], avg, places=0)
-        self.assertFalse(p["weight"]["ok"])
+        self.assertFalse(p["weight"]["ok"])  # no estimator file in the sample config
 
     def test_train(self):
         t = self.h.train()["train"]["data"]
@@ -125,10 +125,19 @@ class Screens(unittest.TestCase):
 
     def test_estimate_file(self):
         f = Path(tempfile.mkdtemp(), "est.json")
-        f.write_text(json.dumps({"as_of": "2026-10-07", "expenditure": 2610, "secret": "x"}))
-        e = health(Recorder(), estimator_file=str(f)).estimate()
+        f.write_text(json.dumps({"as_of": "2026-10-07", "expenditure": 2610, "trend_kg": 80.1,
+                                 "weekly_change_kg": -0.4, "held": False, "secret": "x"}))
+        hl = health(Recorder(), estimator_file=str(f))
+        e = hl.estimate()
         self.assertEqual(e["expenditure"], 2610)
         self.assertNotIn("secret", e)
+        self.assertEqual(hl.weight()["trend_kg"], 80.1)
+
+    def test_held_estimate_is_not_shown_as_a_number(self):
+        f = Path(tempfile.mkdtemp(), "est.json")
+        f.write_text(json.dumps({"as_of": "2026-10-07", "expenditure": None, "held": True}))
+        with self.assertRaises(SourceError):
+            health(Recorder(), estimator_file=str(f)).estimate()
 
     def test_not_connected(self):
         p = Health({}, today=TODAY).progress()

@@ -1012,7 +1012,8 @@ async function screenProgress(n) {
     ${tile("Average fibre", avg.fibre != null ? fmtN(avg.fibre) + " g" : "—", pctOf(avg.fibre, goals.fibre))}
     ${tile("Logging consistency", `${nut.logged}/${nut.of}`, "Complete days, today excluded")}
     ${tile("Expenditure", est ? fmtN(est.expenditure) : "—", est ? "kcal/day, from your estimate" : esc(d.estimate ? d.estimate.error : "Not connected"))}
-    ${tile("Weight trend", "—", esc(d.weight.error))}
+    ${tile("Weight trend", d.weight && d.weight.ok ? fmtN(d.weight.data.trend_kg) + " kg" : "—",
+      d.weight && d.weight.ok ? `trend ${d.weight.data.weekly_change_kg > 0 ? "+" : ""}${esc(d.weight.data.weekly_change_kg)} kg a week` : esc(d.weight ? d.weight.error : "Not connected"))}
   </div>`;
 
   const rows = nut.days;

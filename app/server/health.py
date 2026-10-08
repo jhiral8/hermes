@@ -201,8 +201,10 @@ class Health:
             data = json.loads(Path(self.estimator_file).read_text(encoding="utf-8"))
         except OSError:
             raise SourceError("expenditure estimator hasn't written a result yet")
+        if data.get("held") or data.get("expenditure") is None:
+            raise SourceError("expenditure estimate is held until there's more data")
         return {k: data.get(k) for k in ("as_of", "expenditure", "low", "high", "trend_kg",
-                                         "weekly_change_kg", "target_kcal", "proposal")}
+                                         "weekly_change_kg", "intake_days", "weigh_ins")}
 
     # ------------------------------------------------------------ progress
 
@@ -227,7 +229,15 @@ class Health:
 
         return {"nutrition": _section(build), "goals": _section(self.goals),
                 "estimate": _section(self.estimate), "links": self.links(), "today": self.today().isoformat(),
-                "weight": {"ok": False, "error": "weight history isn't readable by the apps' tokens yet"}}
+                "weight": _section(self.weight)}
+
+    def weight(self):
+        """Weight trend from the estimator's feed: the estimate's own trend, not the raw scale."""
+        est = self.estimate()
+        if est.get("trend_kg") is None:
+            raise SourceError("not enough weigh-ins yet")
+        return {"trend_kg": est["trend_kg"], "weekly_change_kg": est.get("weekly_change_kg"),
+                "weigh_ins": est.get("weigh_ins")}
 
     # ------------------------------------------------------------ training
 
