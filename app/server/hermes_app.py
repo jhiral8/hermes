@@ -33,8 +33,10 @@ from api import ActionError, App
 from artifacts import ArtifactError, Artifacts
 from chat import ChatError, DemoMax, MaxChat
 from demo import Demo
+from health import Health
+import demo_health
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 STREAMED = object()  # a handler already wrote the response
 HERE = Path(__file__).resolve().parent
 DEFAULT_WEB = HERE.parent / "web"
@@ -250,7 +252,19 @@ def make_chat(cfg, app, artifacts=None):
     return MaxChat(mc, audit=app.audit, artifacts=artifacts)
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None):
+def make_health(cfg, app):
+    """Read-only health screens, if the Trace apps are configured."""
+    if app.demo:
+        return Health(demo_health.sample_config(), opener=demo_health.make_opener(_today_london))
+    hc = cfg.get("health")
+    return Health(hc) if hc else None
+
+
+def _today_london():
+    return Health({}).today()
+
+
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -259,6 +273,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None):
         artifacts = make_artifacts(cfg, app)
     if chat is None:
         chat = make_chat(cfg, app, artifacts)
+    if health is None:
+        health = make_health(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -324,6 +340,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None):
                 self._artifact_get(path[len("/api/artifacts"):].strip("/"))
             elif path == "/api/chat" or path.startswith("/api/chat/"):
                 self._chat_get(path[len("/api/chat"):].strip("/"))
+            elif path.startswith("/api/health/"):
+                self._health_get(path[len("/api/health/"):])
             elif path in get_routes:
                 self._json(200, get_routes[path]())
             elif path.startswith("/api/"):
@@ -416,6 +434,31 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None):
             except ChatError as e:
                 self._json(e.code, {"ok": False, "error": str(e), **app.meta()})
 
+        def _health_get(self, what):
+            if health is None:
+                self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
+                return
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                if what == "food":
+                    day = (q.get("day") or [None])[0]
+                    if day is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                        raise ValueError
+                    out = health.food(day)
+                elif what == "train":
+                    out = health.train()
+                elif what == "meals":
+                    out = health.meals()
+                elif what == "progress":
+                    out = health.progress(int((q.get("days") or ["14"])[0]))
+                else:
+                    self._json(404, {"error": "not found"})
+                    return
+            except ValueError:
+                self._json(400, {"error": "Bad date."})
+                return
+            self._json(200, {"ok": True, **out, **app.meta()})
+
         def _artifact_get(self, name):
             try:
                 if artifacts is None:
@@ -501,7 +544,8 @@ def main(argv=None):
     app = App(cfg, cache, demo=demo)
     artifacts = make_artifacts(cfg, app)
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
-                              make_handler(cfg, args.web, cache, app, make_chat(cfg, app, artifacts), artifacts))
+                              make_handler(cfg, args.web, cache, app, make_chat(cfg, app, artifacts), artifacts,
+                                           make_health(cfg, app)))
     print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
           f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()

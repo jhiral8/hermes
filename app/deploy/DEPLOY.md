@@ -168,3 +168,30 @@ any tool calls listed, and the chat is still there after a reload. Asking
 Max for "a one-page summary as a page" puts a file card under his reply that
 opens in the side panel. With the
 kill switch on, the app refuses to send and says why.
+
+## Phase 4, step 1: Health screens (read-only)
+
+Food, Train, Meals & Shop and Progress read NutriTrace, LiftTrace and
+CookTrace over their public API on loopback. Nothing health-related goes to
+Max or any model, and nothing is logged from the app yet.
+
+1. In each app's settings, create a personal token named `hermes-read`:
+   NutriTrace `mcp:read`, LiftTrace `mcp:read`, CookTrace `mcp:read` and
+   `read:recipes`. Save each one as a file, one per app (never in chat):
+   `/etc/hermes-app/health/nutritrace.key`, `lifttrace.key`, `cooktrace.key`.
+   Owner `root`, group `hermes-app`, mode `0640`.
+2. Check the scopes: `GET /api/v1/me` on each app with its token. It must
+   list the scopes above and nothing more.
+3. Each app needs `PUBLIC_API_ENABLED=1`, otherwise `/api/v1/*` returns 404.
+   Set it in the app's environment and restart that app only.
+4. Config: the `health` block in `config.example.json` (ports 3001 to 3003,
+   the key files above, the estimator output path). Add it to the live
+   config and restart hermes-app.
+5. The expenditure estimator isn't running on the server yet. Until it writes
+   `/var/lib/hermes-app-feed/estimator.json`, the Expenditure tile says so.
+   Weight history isn't readable by the tokens, so the weight tiles say that
+   too. Both are expected, not faults.
+
+Test: open Health in the app. Food shows today's diary from NutriTrace; a
+bad token shows "refused the token" on the screen that needs it, and the
+rest still loads.

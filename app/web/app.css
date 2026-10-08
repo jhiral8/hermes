@@ -25,3 +25,7 @@ textarea.inp { resize: vertical; min-height: 88px; font: inherit; }
 
 /* Max chat: the bottom bar covers the footnote on phones. */
 @media (max-width:1023px){ .mc-hint{display:none} main .mc-app{height:calc(100dvh - 164px);min-height:360px} }
+
+/* Health: the weekly grid's days are links (the mockup uses buttons). */
+a.g-col{text-decoration:none}
+a.iconbtn{display:inline-flex;align-items:center;justify-content:center}

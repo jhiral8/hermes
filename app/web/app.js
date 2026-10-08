@@ -100,7 +100,7 @@ function toast(msg) {
 
 const NAV = [
   { h: "today", i: "today", t: "Today" },
-  { h: "soon/health", i: "health", t: "Health", soon: 4 },
+  { h: "health/food", i: "health", t: "Health" },
   { h: "soon/inbox", i: "inbox", t: "Inbox", soon: 5 },
   { h: "soon/planner", i: "planner", t: "Planner", soon: 5 },
   { label: "Assistant & agents" },
@@ -130,13 +130,13 @@ function renderShell(route) {
     <div class="brand">${logoMark()}<b>Hermes</b><span>Personal</span></div>
     <nav class="nav" aria-label="Primary">${NAV.map((x) => {
       if (x.label) return `<div class="nav-label">${esc(x.label)}</div>`;
-      const cur = x.h.split("/")[0] === area && (!x.soon || route === x.h);
+      const cur = x.h.split("/")[0] === area;
       return `<a href="#${x.h}"${cur ? ' aria-current="page"' : ""}${x.soon ? ' class="soon"' : ""}>${ic(x.i)}<span>${esc(x.t)}</span>${
         x.count && n ? `<span class="count" aria-label="${n} pending">${n}</span>` : ""}${x.soon ? `<span class="soon-tag">Phase ${x.soon}</span>` : ""}</a>`;
     }).join("")}</nav>
     <div class="side-foot"><div class="acct"><span class="avatar">${esc(initials(me.name || "Craig"))}</span><span class="who"><b style="display:block;font-size:13.5px;font-weight:600">${esc((me.name || "Craig").split(" ")[0])}</b><span class="xs muted">Owner · ${esc(me.login || "signed in through Tailscale")}</span></span></div></div>`;
 
-  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", more: "More", soon: "Coming next" }[area] || "Hermes";
+  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", more: "More", soon: "Coming next" }[area] || "Hermes";
   $("#top").innerHTML = `
     <a href="#today" class="phone-only" aria-label="Hermes home" style="display:flex">${logoMark(26)}</a>
     <div class="crumb"><span class="cur">${esc(title)}</span></div>
@@ -152,7 +152,7 @@ function renderShell(route) {
     <button type="button" class="cap" data-act="createTask">${ic("plus")}Task</button>
     <a href="#work"${area === "work" ? ' aria-current="page"' : ""}>${ic("work")}Work</a>
     <a href="#approvals"${area === "approvals" ? ' aria-current="page"' : ""}>${ic("approvals")}Review${n ? `<span class="count">${n}</span>` : ""}</a>
-    <a href="#more"${["more", "max", "agents", "routines", "system", "soon"].includes(area) ? ' aria-current="page"' : ""}>${ic("more")}More</a>`;
+    <a href="#more"${["more", "max", "agents", "routines", "system", "soon", "health"].includes(area) ? ' aria-current="page"' : ""}>${ic("more")}More</a>`;
 }
 
 /* ---------- screens ---------- */
@@ -415,14 +415,13 @@ async function screenSystem(tab) {
 }
 
 function screenMore() {
-  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["soon/health", "health", "Health", "Food, training and progress in Phase 4"]];
+  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"]];
   return `<div class="ph"><div class="ph-t"><h1>More</h1></div></div><section class="panel"><div class="list">${items.map(([h, i, t, s]) => `<a class="li" href="#${h}"><span class="main"><span class="t">${ic(i, 16)} ${t}</span><span class="s">${s}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div></section>`;
 }
 
 function screenSoon(what) {
   const info = {
     max: ["Max", 3, "Chat with Max here as well as on Signal, with the artifacts panel from the mockup."],
-    health: ["Health", 4, "Food, Train and Progress on NutriTrace, LiftTrace and CookTrace, once it matches or beats them."],
     inbox: ["Inbox", 5, "Your mail, shown to you only. It never goes to Max or any model."],
     planner: ["Planner", 5, "Your calendar, once it's connected."],
     library: ["Library", 5, "salt.md notes, signed in as you."],
@@ -779,6 +778,260 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "max-in") S.chatDraft = e.target.value;
 });
 
+/* ---------- Health (Phase 4, step 1: read-only) ----------
+   Food, Train, Meals & Shop and Progress from NutriTrace, LiftTrace and
+   CookTrace. Logging stays in those apps: the buttons open them. */
+
+const HEALTH_TABS = [["food", "Food"], ["train", "Train"], ["meals", "Meals & Shop"], ["progress", "Progress"]];
+const HEALTH_NUTS = [["kcal", "Calories", "kcal", "var(--m-k)"], ["protein", "Protein", "g", "var(--m-p)"],
+  ["carbs", "Carbs", "g", "var(--m-c)"], ["fat", "Fat", "g", "var(--m-f)"], ["fibre", "Fibre", "g", "var(--m-fib)"]];
+const fmtN = (n) => (n == null || isNaN(n) ? "—" : Math.round(Number(n)).toLocaleString("en-GB"));
+const isoDay = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(s || "") ? s : null);
+const shiftDay = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const dayName = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+const dayShort = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short" });
+const hBar = (v, t) => {
+  const p = v == null || !t ? 0 : Math.min(100, (100 * v) / t);
+  return `<div class="bar" role="img" aria-label="${esc(fmtN(v))} of ${esc(fmtN(t))}"><i style="width:${p.toFixed(1)}%"></i></div>`;
+};
+const hNotice = (part, what) => (part && !part.ok ? notConnected(what, part.error) : "");
+const appLink = (url, label, cls = "btn sm") => (url ? `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>` : "");
+
+function healthHead(sub, title, actions = "", subtitle = "") {
+  return `<div class="ph"><div class="ph-t"><h1>${esc(title)}</h1>${subtitle ? `<p class="sub">${esc(subtitle)}</p>` : ""}</div>${actions ? `<div class="ph-a">${actions}</div>` : ""}</div>
+    <nav class="tabs" aria-label="Sections">${HEALTH_TABS.map(([k, t]) => `<a href="#health/${k}"${k === sub ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>`;
+}
+
+// One request per screen. A null answer means the server didn't answer at all.
+async function healthData(key, path) {
+  return load("health:" + key, "/api/health/" + path);
+}
+const healthDown = (sub, title) => healthHead(sub, title) + notConnected("Health", "Couldn't reach the server.");
+
+async function screenHealth(rest) {
+  const sub = HEALTH_TABS.some(([k]) => k === rest[0]) ? rest[0] : "food";
+  if (sub === "food") return screenFood(isoDay(rest[1]));
+  if (sub === "train") return screenTrain();
+  if (sub === "meals") return screenMeals();
+  return screenProgress(rest[1] === "7" ? 7 : 14);
+}
+
+/* ---------- Food ---------- */
+
+async function screenFood(day) {
+  const d = await healthData("food:" + (day || "today"), "food" + (day ? `?day=${encodeURIComponent(day)}` : ""));
+  if (!d) return healthDown("food", "Food");
+  const links = d.links || {};
+  const cur = d.day && d.day.ok ? d.day.data.date : d.today;
+  const goals = d.goals && d.goals.ok ? d.goals.data : {};
+  const week = d.week && d.week.ok ? d.week.data : [];
+  const monday = week.length ? week[0].date : cur;
+  const nextWeek = shiftDay(monday, 7);
+  const sel = week.find((r) => r.date === cur) || { date: cur, status: "open" };
+
+  const cellFor = (row, [k, label, unit, col]) => {
+    const goal = goals[k];
+    const v = row.status === "future" || row.status === "none" ? null : row[k];
+    const cls = { logged: "complete", open: "open", future: "future" }[row.status] || "missing";
+    const frac = v != null && goal ? Math.min(1, v / goal) : 0;
+    const over = v != null && goal && v > goal * 1.05 && row.status !== "future" ? " over" : "";
+    const tip = `${dayName(row.date)} · ${label}: ${v == null ? "no record" : fmtN(v) + " of " + fmtN(goal) + " " + unit}`;
+    return `<span class="g-cell ${cls}${over}" title="${esc(tip)}"><span class="g-pill"><i style="height:${Math.round(frac * 100)}%;background:${col}"></i></span></span>`;
+  };
+  const cols = week.map((row) => `<a class="g-col${row.date === cur ? " sel" : ""}${row.status === "open" ? " today" : ""}" href="#health/food/${row.date}" aria-label="${esc(dayName(row.date))}">
+      ${HEALTH_NUTS.map((n) => cellFor(row, n)).join("")}<span class="g-day"><span class="dl-l">${esc(dayShort(row.date))}</span><span class="dl-s">${esc(dayShort(row.date)[0])}</span></span></a>`).join("");
+  const nums = HEALTH_NUTS.map(([k, label, unit]) => {
+    const v = sel.status === "future" || sel.status === "none" ? null : sel[k];
+    return `<div class="g-num"><span class="g-lab">${label}</span><b class="num">${fmtN(v)}${unit === "g" ? "<small> g</small>" : ""}</b><span class="g-sub">${goals[k] ? "of " + fmtN(goals[k]) : ""}</span></div>`;
+  }).join("");
+  const logged = week.filter((r) => r.status === "logged").length;
+  const weekNav = `<div class="btns" style="gap:4px">
+      <a class="iconbtn" href="#health/food/${shiftDay(monday, -7)}" aria-label="Previous week">${ic("back")}</a>
+      <b class="small" style="min-width:110px;text-align:center">${week.length ? esc(dayShort(monday) + " " + dayName(monday).split(" ").slice(1).join(" ") + " – " + dayName(week[6].date).split(" ").slice(1).join(" ")) : "This week"}</b>
+      ${nextWeek <= d.today ? `<a class="iconbtn" href="#health/food/${nextWeek}" aria-label="Next week">${ic("chev")}</a>` : `<span class="iconbtn" aria-disabled="true" style="opacity:.35">${ic("chev")}</span>`}
+    </div>`;
+
+  const est = d.estimate && d.estimate.ok ? d.estimate.data : null;
+  const side = est
+    ? `<div class="spark-card"><span class="small"><b>Expenditure</b></span><span class="xs muted">Estimate</span>
+        <span class="spark-v"><b class="num">${fmtN(est.expenditure)}</b> <span class="small muted">kcal</span></span>
+        <span class="xs muted">${est.low && est.high ? `likely ${fmtN(est.low)}–${fmtN(est.high)}` : "From your logged intake and weight"}</span></div>`
+    : `<div class="spark-card"><span class="small"><b>Expenditure</b></span><span class="xs muted">${esc(d.estimate ? d.estimate.error : "Not connected")}</span></div>`;
+
+  const dayRec = d.day && d.day.ok ? d.day.data : null;
+  const t = dayRec ? dayRec.totals : null;
+  const dayBody = !d.day
+    ? notConnected("NutriTrace", "")
+    : !d.day.ok ? notConnected("NutriTrace", d.day.error)
+    : `<section class="panel"><div class="cols even" style="align-items:center"><div>
+        <div class="kpi"><b>${fmtN(t.kcal)}</b><span>of ${fmtN(goals.kcal)} kcal${goals.kcal ? ` · ${fmtN(Math.abs(goals.kcal - t.kcal))} ${t.kcal > goals.kcal ? "over" : "left"}` : ""}</span></div>
+        <div style="margin-top:10px">${hBar(t.kcal, goals.kcal)}</div></div>
+        <div class="macros">${[["protein", "Protein"], ["carbs", "Carbohydrate"], ["fat", "Fat"], ["fibre", "Fibre"]].map(([k, l]) => `<div class="macro"><div class="l"><span>${l}</span><span>${fmtN(t[k])}<span class="muted" style="font-weight:400"> / ${fmtN(goals[k])} g</span></span></div>${hBar(t[k], goals[k])}</div>`).join("")}</div>
+      </div></section>
+      ${dayRec.meals.length ? `<div class="cols even">${dayRec.meals.map((m) => `<section class="panel"><div class="panel-h"><h2>${esc(m.meal)}</h2><span class="small muted num">${fmtN(m.kcal)} kcal</span></div>
+        <div class="list">${m.items.map((i) => `<div class="li"><span class="main"><span class="t">${esc(i.name)}</span><span class="s">${esc(i.amount)}${i.brand ? " · " + esc(i.brand) : ""} · P ${fmtN(i.protein)} · C ${fmtN(i.carbs)} · F ${fmtN(i.fat)}</span></span><span class="end"><span class="kc">${fmtN(i.kcal)} kcal</span></span></div>`).join("")}</div></section>`).join("")}</div>`
+        : `<div class="empty"><h3>Nothing logged for ${esc(dayName(cur))}</h3><p>Log it in NutriTrace and it appears here.</p></div>`}`;
+
+  return healthHead("food", "Food", appLink(links.nutritrace, "Log food in NutriTrace", "btn primary"),
+      "Read-only for now. Logging stays in NutriTrace until this screen matches it.") + `
+    <div class="stack s24">
+      <div class="row-flex"><div class="btns">
+        <a class="iconbtn" href="#health/food/${shiftDay(cur, -1)}" aria-label="Previous day">${ic("back")}</a>
+        <b style="min-width:150px;text-align:center">${esc(dayName(cur))}${cur === d.today ? " · Today" : ""}</b>
+        ${cur < d.today ? `<a class="iconbtn" href="#health/food/${shiftDay(cur, 1)}" aria-label="Next day">${ic("chev")}</a>` : ""}
+      </div></div>
+      ${hNotice(d.goals, "The goals")}
+      <section class="panel"><div class="panel-h"><h2>Weekly nutrition</h2>${weekNav}</div>
+        ${week.length ? `<div class="wk2"><div class="stack s8"><div class="g-wrap"><div class="g-cols" style="--n:7">${cols}</div>
+          <div class="g-nums">${nums}<span class="g-day">${esc(dayName(cur))}</span></div></div>
+          <div class="g-key"><span>Faded: partly logged or today</span><span>Cap on top: over target</span><span>Dashed: no record</span></div>
+          <p class="xs muted">${logged} of ${week.filter((r) => r.status !== "future").length} days logged so far this week.</p></div>
+          <div class="wk2-side">${side}</div></div>` : notConnected("NutriTrace", d.week && d.week.error)}
+      </section>
+      ${dayBody}
+      <p class="xs muted">Weight history isn't readable by the apps' tokens yet, so it isn't shown here.</p>
+    </div>`;
+}
+
+/* ---------- Train ---------- */
+
+async function screenTrain() {
+  const d = await healthData("train", "train");
+  if (!d) return healthDown("train", "Train");
+  const links = d.links || {};
+  const t = d.train.ok ? d.train.data : null;
+  const r = d.records && d.records.ok ? d.records.data : [];
+  const head = healthHead("train", "Train", appLink(links.lifttrace, "Open LiftTrace", "btn"),
+    "Read-only for now. Sessions are logged in LiftTrace.");
+  if (!t) return head + notConnected("LiftTrace", d.train.error);
+
+  const nx = t.next;
+  const next = nx
+    ? `<section class="panel"><div class="panel-h"><div><div class="eyebrow">Next session</div><h2 class="h2-serif">${esc(nx.name)}</h2></div><span class="badge info">Planned</span></div>
+        <p class="small muted">${esc(nx.day_label || "")}${t.program.name ? " · " + esc(t.program.name) : ""}</p>
+        <div class="list" style="margin:12px 0">${nx.exercises.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span>
+          <span class="s">Target ${esc(x.target_sets != null ? x.target_sets + " sets" : "—")}${x.last ? ` · Last time ${x.last.top ? fmtN(x.last.top) + " kg · " : ""}${esc((x.last.reps || []).join(", "))} reps` : " · No record yet"}</span></span></div>`).join("")}</div>
+        ${appLink(links.lifttrace, "Open session in LiftTrace", "btn primary lg")}</section>`
+    : `<section class="panel"><p class="small muted">No active programme in LiftTrace.</p></section>`;
+
+  const sessions = t.sessions.length
+    ? `<section class="panel"><div class="panel-h"><h2>Recent sessions</h2></div><div class="list">${t.sessions.map((s) => `<div class="li"><span class="main">
+        <span class="t">${esc(s.name || "Session")} · ${esc(s.date)}</span><span class="s">${s.exercises.map((e) => `${esc(e.name)} ${e.top ? fmtN(e.top) + " kg" : ""} × ${esc(e.reps.join(", "))}`).join(" · ")}</span></span>
+        <span class="end"><span class="badge ${s.completed ? "ok" : "warn"}">${s.completed ? "Completed" : "Incomplete"}</span></span></div>`).join("")}</div></section>`
+    : `<section class="panel"><h2>Recent sessions</h2><p class="small muted">No sessions yet.</p></section>`;
+
+  const p = t.program;
+  const programme = `<section class="panel"><div class="eyebrow">Current programme</div><h2 class="h2-serif" style="margin-bottom:6px">${esc(p.name || "No programme")}</h2>
+    ${p.weeks ? `<p class="small muted">Week ${esc(p.current_week)} of ${esc(p.weeks)}</p>` : ""}
+    <ol class="small" style="padding-left:18px;margin:12px 0 0">${(nx ? t.program.templates : []).map((x) => `<li>${esc(x.name)}</li>`).join("")}</ol></section>`;
+
+  const records = r.length
+    ? `<section class="panel"><h2 style="margin-bottom:8px">Personal bests</h2><div class="list">${r.map((x) => `<div class="li"><span class="main">
+        <span class="t">${esc(x.name)}</span><span class="s">${esc(x.date || "")} · ${fmtN(x.weight)} kg × ${esc(x.reps)} · est. 1RM ${fmtN(x.e1rm)} kg</span></span></div>`).join("")}</div></section>`
+    : "";
+
+  return head + `<div class="stack s24"><div class="cols"><div class="stack s24">${next}${sessions}</div><div class="stack s24">${programme}${records}</div></div></div>`;
+}
+
+/* ---------- Meals & Shop ---------- */
+
+async function screenMeals() {
+  const d = await healthData("meals", "meals");
+  if (!d) return healthDown("meals", "Meals & Shop");
+  const links = d.links || {};
+  const head = healthHead("meals", "Meals & Shop", appLink(links.cooktrace, "Open CookTrace", "btn"),
+    "Plan meals, cook batches and shop for what's missing. Read-only for now.");
+  const section = (title, part, render) => `<section class="panel"><h2 style="margin-bottom:8px">${title}</h2>${part && part.ok ? render(part.data) : notConnected("CookTrace", part && part.error)}</section>`;
+  const byDay = (items) => {
+    const groups = {};
+    for (const x of items) (groups[x.date] = groups[x.date] || []).push(x);
+    return Object.keys(groups).map((k) => `<div class="eyebrow" style="margin-top:12px">${esc(dayName(k))}</div><div class="list">${groups[k].map((x) =>
+      `<div class="li"><span class="main"><span class="t">${esc(x.recipe || "Untitled")}</span><span class="s">${esc(x.meal_type || "")}${x.servings ? " · " + esc(x.servings) + " servings" : ""}</span></span>${x.rating ? `<span class="end small muted">${esc(x.rating)}/5</span>` : ""}</div>`).join("")}</div>`).join("") || `<p class="small muted">Nothing here.</p>`;
+  };
+  const shop = (items) => {
+    const groups = {};
+    for (const x of items) (groups[x.aisle || "Other"] = groups[x.aisle || "Other"] || []).push(x);
+    return Object.keys(groups).map((a) => `<div class="eyebrow" style="margin-top:12px">${esc(a)}</div><div class="list">${groups[a].map((x) =>
+      `<div class="li${x.checked ? " muted" : ""}"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.quantity != null ? esc(x.quantity) + (x.unit ? " " + esc(x.unit) : "") : ""}</span></span><span class="end">${x.checked ? `<span class="badge ok">Bought</span>` : ""}</span></div>`).join("")}</div>`).join("") || `<p class="small muted">Shopping list is empty.</p>`;
+  };
+  const recipes = (data) => `<div class="list">${data.items.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.servings ? esc(x.servings) + " servings" : ""}${x.kcal ? " · " + fmtN(x.kcal) + " kcal" : ""}</span></span></div>`).join("")}</div>${data.total > data.items.length ? `<p class="xs muted">Showing ${data.items.length} of ${fmtN(data.total)}.</p>` : ""}`;
+
+  return head + `<div class="stack s24">
+    <div class="cols even">
+      ${section(`Planned · ${esc(dayName(d.week[0]))} – ${esc(dayName(d.week[1]))}`, d.planned, byDay)}
+      ${section("Cooked recently", d.cooked, byDay)}
+    </div>
+    <div class="cols even">
+      ${section("Shopping", d.shopping, shop)}
+      ${section("Recipes", d.recipes, recipes)}
+    </div>
+    <p class="xs muted">A planned meal isn't an intake record. It only counts once it's logged in NutriTrace.</p>
+  </div>`;
+}
+
+/* ---------- Progress ---------- */
+
+function calorieChart(rows, target) {
+  const W = 720, H = 240, L = 44, R = 12, T = 14, B = 34;
+  const n = rows.length, bw = (W - L - R) / n;
+  const max = Math.max((target || 2000) * 1.25, ...rows.map((r) => r.kcal || 0));
+  const y = (v) => T + (1 - v / max) * (H - T - B);
+  const ticks = [0, 1000, 2000].filter((v) => v < max);
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily calories${target ? ` against a ${fmtN(target)} kcal target` : ""}">
+    ${ticks.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmtN(v)}</text>`).join("")}
+    ${rows.map((r, i) => {
+      const x = L + i * bw + 3, w = bw - 6;
+      const lab = `<text x="${x + w / 2}" y="${H - 14}" text-anchor="middle">${+r.date.slice(8)}</text>`;
+      if (r.status === "none" || r.status === "future") return `<rect x="${x}" y="${y(0) - 40}" width="${w}" height="40" fill="none" stroke="var(--line-2)" stroke-dasharray="3 3" rx="4"/><text x="${x + w / 2}" y="${y(0) - 46}" text-anchor="middle" style="font-size:9px">none</text>${lab}`;
+      const fill = r.status === "logged" ? "var(--chart-1)" : "url(#hatch)";
+      return `<rect x="${x}" y="${y(r.kcal || 0)}" width="${w}" height="${Math.max(0, y(0) - y(r.kcal || 0))}" fill="${fill}" rx="4"/>${lab}`;
+    }).join("")}
+    ${target ? `<line x1="${L}" x2="${W - R}" y1="${y(target)}" y2="${y(target)}" stroke="var(--fg)" stroke-width="1.5" stroke-dasharray="6 4"/><text x="${W - R}" y="${y(target) - 6}" text-anchor="end" style="fill:var(--fg)">Target ${fmtN(target)}</text>` : ""}
+    <defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="color-mix(in oklab,var(--chart-1) 25%,transparent)"/><rect width="2.5" height="6" fill="var(--chart-1)"/></pattern></defs></svg>`;
+}
+
+async function screenProgress(n) {
+  const d = await healthData("progress" + n, `progress?days=${n}`);
+  if (!d) return healthDown("progress", "Progress");
+  const links = d.links || {};
+  const head = healthHead("progress", "Progress", "",
+    "Intake and targets. Missing days stay visible and aren't averaged.");
+  const seg = `<div class="row-flex">${[7, 14].map((k) => `<a class="btn sm${k === n ? " primary" : " ghost"}" href="#health/progress/${k}" aria-pressed="${k === n}">Last ${k} days</a>`).join("")}
+    <span class="small muted">Averages use complete days only.</span></div>`;
+  if (!d.nutrition.ok) return head + `<div class="stack s24">${seg}${notConnected("NutriTrace", d.nutrition.error)}</div>`;
+
+  const nut = d.nutrition.data;
+  const goals = d.goals && d.goals.ok ? d.goals.data : {};
+  const avg = nut.avg || {};
+  const est = d.estimate && d.estimate.ok ? d.estimate.data : null;
+  const tile = (label, value, sub) => `<div class="panel"><div class="xs muted">${label}</div><div class="kpi" style="margin-top:6px"><b style="font-size:26px">${value}</b></div><p class="xs muted" style="margin-top:6px">${sub}</p></div>`;
+  const pctOf = (v, t) => (v == null || !t ? "" : `${Math.round((100 * v) / t)}% of target`);
+  const tiles = `<div class="tpl-grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+    ${tile("Average calories", avg.kcal != null ? fmtN(avg.kcal) : "—", avg.kcal != null ? `${pctOf(avg.kcal, goals.kcal)} · ${nut.logged} complete days` : "No complete days yet")}
+    ${tile("Average protein", avg.protein != null ? fmtN(avg.protein) + " g" : "—", pctOf(avg.protein, goals.protein))}
+    ${tile("Average fibre", avg.fibre != null ? fmtN(avg.fibre) + " g" : "—", pctOf(avg.fibre, goals.fibre))}
+    ${tile("Logging consistency", `${nut.logged}/${nut.of}`, "Complete days, today excluded")}
+    ${tile("Expenditure", est ? fmtN(est.expenditure) : "—", est ? "kcal/day, from your estimate" : esc(d.estimate ? d.estimate.error : "Not connected"))}
+    ${tile("Weight trend", "—", esc(d.weight.error))}
+  </div>`;
+
+  const rows = nut.days;
+  const chart = `<section class="panel"><div class="panel-h"><h2>Daily calories</h2></div>
+    <div class="chart-wrap">${calorieChart(rows, goals.kcal)}</div>
+    <div class="legend" style="margin-top:8px"><span><svg width="14" height="10"><rect width="14" height="10" rx="3" fill="var(--chart-1)"/></svg>Complete day</span><span><svg width="14" height="10"><rect width="14" height="10" rx="3" fill="url(#hatch)" stroke="var(--chart-1)"/></svg>Partial or open day</span><span><svg width="14" height="10"><rect x=".5" y=".5" width="13" height="9" rx="3" fill="none" stroke="var(--fg-3)" stroke-dasharray="2 2"/></svg>No record</span></div></section>`;
+
+  const macros = `<section class="panel"><h2 style="margin-bottom:12px">Macros vs target · average</h2><div class="stack s8">
+    ${[["protein", "Protein"], ["carbs", "Carbohydrate"], ["fat", "Fat"], ["fibre", "Fibre"]].map(([k, l]) => `<div class="macro"><div class="l" style="flex-direction:row;justify-content:space-between"><span>${l}</span><span>${fmtN(avg[k])} / ${fmtN(goals[k])} g</span></div>${hBar(avg[k], goals[k])}</div>`).join("")}
+    </div></section>`;
+
+  const log = `<section class="panel"><div class="panel-h"><h2>Days</h2></div><div class="list">${rows.slice().reverse().map((r) =>
+    `<a class="li" href="#health/food/${r.date}"><span class="main"><span class="t">${esc(dayName(r.date))}</span><span class="s">${r.status === "logged" ? `${fmtN(r.kcal)} kcal · P ${fmtN(r.protein)} g` : r.status === "open" ? "Today, still open" : "No record"}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div>
+    ${appLink(links.nutritrace, "See the full history in NutriTrace", "btn sm ghost")}</section>`;
+
+  return head + `<div class="stack s24">${seg}${tiles}${chart}<div class="cols even">${macros}${log}</div>
+    ${hNotice(d.goals, "The goals")}</div>`;
+}
+
 /* ---------- router ---------- */
 
 let renderSeq = 0;
@@ -797,6 +1050,7 @@ async function render() {
   else if (area === "max") html = await screenMax(rest[0]);
   else if (area === "more") html = screenMore();
   else if (area === "soon") html = screenSoon(rest[0]);
+  else if (area === "health") html = await screenHealth(rest);
   else html = await screenToday();
   if (seq !== renderSeq) return; // a newer render started
   if (!S.cache.approvals && area !== "approvals") load("approvals", "/api/approvals").then(() => renderShell(route));
