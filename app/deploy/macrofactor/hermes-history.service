@@ -7,9 +7,13 @@ Type=oneshot
 User=health
 Group=hermes-app
 UMask=0027
+# Own folder, owned by health, readable by the app's group only. It is not
+# /var/lib/hermes-app, which holds Max's chat and the kill-switch file.
+StateDirectory=hermes-history
+StateDirectoryMode=0750
 ExecStart=/usr/bin/python3 /opt/hermes-app/app/server/history_feed.py \
   --history /home/health/imports/macrofactor/MacroFactor-20261007134323.xlsx \
   --nutritrace-db /home/health/health-stack/data/nutritrace/db/nutritrace.db \
-  --days-out /var/lib/hermes-app/health-days.json \
-  --estimator-out /var/lib/hermes-app/estimator.json
+  --days-out /var/lib/hermes-history/health-days.json \
+  --estimator-out /var/lib/hermes-history/estimator.json
 NoNewPrivileges=yes
