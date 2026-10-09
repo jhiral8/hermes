@@ -29,7 +29,22 @@ declare -A PORT=([nutritrace]=3001 [lifttrace]=3002 [cooktrace]=3003)
 HUID=$(id -u health)
 SOCK="/run/user/$HUID/docker.sock"
 
-fail() { echo "STOP: $*" >&2; echo "Nothing was changed." >&2; exit 1; }
+# CHANGED flips to 1 the moment the first change is made, so the failure message
+# below is accurate about what is on the server.
+CHANGED=0
+fail() {
+  echo "STOP: $*" >&2
+  if [ "$CHANGED" = 1 ]; then
+    echo "Changes HAVE started on the server. Current state:" >&2
+    echo "  override: $([ -e "$OVERRIDE" ] && echo "present ($OVERRIDE)" || echo "removed")" >&2
+    echo "  tokens:   $(ls "$KEYDIR"/*-write.key 2>/dev/null | tr '\n' ' ' || true)" >&2
+    echo "Undo: sudo rm $OVERRIDE, then restart each app with docker compose up -d --no-deps --pull never <app>." >&2
+    echo "Remove a token by deleting its row in the app's api_tokens table if needed." >&2
+  else
+    echo "Nothing was changed." >&2
+  fi
+  exit 1
+}
 
 # Run docker as the health user (rootless Docker in the stack folder).
 hdocker() {
@@ -97,12 +112,13 @@ YAML
 chown health:health "$tmp"
 chmod 600 "$tmp"
 mv "$tmp" "$OVERRIDE"
+CHANGED=1
 
 # Make sure the merged config really has the switch before restarting anything.
-merged=$(hcompose "config" 2>&1) || { rm -f "$OVERRIDE"; fail "compose config does not validate with the override; removed it"; }
+merged=$(hcompose "config" 2>&1) || { rm -f "$OVERRIDE"; CHANGED=0; fail "compose config does not validate with the override; removed it"; }
 for app in "${APPS[@]}"; do
   echo "$merged" | awk -v s="$app:" '$0 ~ "^  "s {f=1; next} /^[^ ]/ || /^  [^ ]/ {f=0} f' \
-    | grep -q 'PUBLIC_API_WRITE_ENABLED' || { rm -f "$OVERRIDE"; fail "merged config for $app lacks the switch; removed override"; }
+    | grep -q 'PUBLIC_API_WRITE_ENABLED' || { rm -f "$OVERRIDE"; CHANGED=0; fail "merged config for $app lacks the switch; removed override"; }
 done
 
 # 2. Create each app's write token inside its own container (no sign-in, no key
@@ -122,25 +138,34 @@ for app in "${APPS[@]}"; do
   echo "token stored: $keyfile (value not shown)"
 done
 
-# 3. Restart one app at a time, checking it is healthy again each time.
+# 3. Restart one app at a time. The healthcheck runs every 60s, so wait longer
+#    than one interval (up to 150s) before deciding it is unhealthy.
 for app in "${APPS[@]}"; do
   hcompose "up -d --no-deps --pull never $app" >/dev/null
-  for _ in $(seq 1 30); do
+  st=""
+  for _ in $(seq 1 75); do
     st=$(hdocker inspect -f '{{.State.Health.Status}}' "$app" 2>/dev/null || true)
     [ "$st" = "healthy" ] && break
     sleep 2
   done
-  [ "$st" = "healthy" ] || fail "$app did not become healthy after restart (status: ${st:-missing}). Override is still in place; see $OVERRIDE"
+  [ "$st" = "healthy" ] || fail "$app did not become healthy within 150s (status: ${st:-missing})"
   hdocker exec "$app" printenv PUBLIC_API_WRITE_ENABLED | grep -qx 1 || fail "$app is up but PUBLIC_API_WRITE_ENABLED is not 1"
   echo "restarted: $app healthy with writes on"
 done
 
-# 4. Read-only proof: the new token is accepted and carries the write scope.
+# 4. Read-only proof. The token must be accepted on a read route, and its
+#    stored scopes must include mcp:write. LiftTrace has no /api/v1/me, so the
+#    scope check reads the api_tokens table in each container instead.
 for app in "${APPS[@]}"; do
   tok=$(cat "$KEYDIR/$app-write.key")
-  body=$(curl -s -H "Authorization: Bearer $tok" "http://127.0.0.1:${PORT[$app]}/api/v1/me" || true)
-  echo "$body" | grep -q 'mcp:write' || fail "$app: token does not show mcp:write on /api/v1/me"
-  echo "verified: $app token accepted with mcp:write"
+  if [ "$app" = "lifttrace" ]; then read_path=/api/v1/programs; else read_path=/api/v1/me; fi
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" \
+    "http://127.0.0.1:${PORT[$app]}$read_path" || true)
+  [ "$code" = "200" ] || fail "$app: token refused on $read_path (HTTP $code)"
+  scopes=$(hdocker exec "$app" node --input-type=module -e \
+    "import db from '/app/db.js'; const r = db.prepare('SELECT scopes FROM api_tokens WHERE name = ?').all('$TOKEN_NAME'); process.stdout.write(r.map(x => x.scopes).join(' '));" 2>/dev/null || true)
+  echo "$scopes" | grep -q 'mcp:write' || fail "$app: stored token has no mcp:write scope"
+  echo "verified: $app token accepted on $read_path, mcp:write present"
 done
 
 echo "Done. Health writes are on for NutriTrace, LiftTrace and CookTrace."
