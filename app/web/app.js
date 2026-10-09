@@ -1124,6 +1124,39 @@ async function act(name, arg, el) {
     if (name === "logPick") return openLogFood(S.logFoods[Number(arg)]);
     if (name === "offSearch") return await offSearch(arg, el);
     if (name === "logTab") return await logTab(arg);
+    if (name === "describeGo") {
+      const text = ($("#ds-text").value || "").trim();
+      if (text.length < 3) return toast("Say what you ate first.");
+      busy(true);
+      $("#est-out").innerHTML = `<p class="small muted">Max is estimating…</p>`;
+      try { drawEstimate(await api("/api/health/log/describe", { body: { text } })); }
+      catch (e) { $("#est-out").innerHTML = ""; throw e; }
+      finally { busy(false); }
+      return;
+    }
+    if (name === "photoKind") {
+      S.photoKind = arg;
+      document.querySelectorAll('[data-act="photoKind"]').forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.arg === arg)));
+      if ($("#ph-hint-f")) $("#ph-hint-f").hidden = arg === "label";
+      return;
+    }
+    if (name === "estLog") {
+      const items = S.est.items.filter((x) => x.on).map(({ on, ...x }) => x);
+      if (!items.length) return toast("Tick at least one item.");
+      busy(true);
+      try {
+        const r = await api("/api/health/log/estimate", { body: { items, meal: Number($("#est-meal").value), date: S.log.day } });
+        toast(`Logged ${r.logged.length} item${r.logged.length > 1 ? "s" : ""} to ${r.meal || "your diary"}.`);
+        location.hash = `#health/food/${r.date}`;
+      } finally { busy(false); }
+      return;
+    }
+    if (name === "labelLog") {
+      const L = { ...S.label, name: ($("#lb-name").value || "").trim() };
+      busy(true);
+      try { await addToNt(ntFood(L, "")); } finally { busy(false); }
+      return;
+    }
     if (name === "quickAdd") {
       const num = (id) => { const v = ($(id) || {}).value; return v === "" || v == null ? null : Number(v); };
       const kcal = num("#qa-kcal");
@@ -1374,6 +1407,8 @@ document.addEventListener("click", (e) => {
   act(el.dataset.act, el.dataset.arg, el);
 });
 document.addEventListener("change", (e) => {
+  if (e.target.dataset && e.target.dataset.est != null && S.est) { S.est.items[Number(e.target.dataset.est)].on = e.target.checked; estSum(); return; }
+  if (e.target.id === "ph-file") { photoChosen(e.target.files && e.target.files[0]); e.target.value = ""; return; }
   const el = e.target.closest("[data-change]");
   if (!el) return;
   S[el.dataset.change] = el.value;
@@ -1730,7 +1765,7 @@ async function screenLog(day, meal) {
     </div>`;
 }
 
-const LOG_TABS = [["search", "Search"], ["recent", "Recent"], ["meals", "Saved meals"], ["quick", "Quick add"]];
+const LOG_TABS = [["search", "Search"], ["recent", "Recent"], ["meals", "Saved meals"], ["describe", "Describe"], ["photo", "Photo"], ["quick", "Quick add"]];
 const mealOptions = (sel) => MEAL_NAMES.map((m, i) => `<option value="${i}"${i === sel ? " selected" : ""}>${m}</option>`).join("");
 
 async function logTab(tab) {
@@ -1752,6 +1787,19 @@ async function logTab(tab) {
         <div class="field"><label for="qa-meal">Meal</label><select id="qa-meal" class="inp">${mealOptions(lg.meal)}</select></div>
       </div>
       <div class="btns" style="margin-top:14px"><button type="button" class="btn primary" data-act="quickAdd">Log it</button></div>`;
+    return;
+  }
+  if (tab === "describe") {
+    pane.innerHTML = `<div class="field"><label for="ds-text">Describe what you ate</label><textarea id="ds-text" class="inp" rows="3" maxlength="500" placeholder="2 eggs, a slice of toast with butter, a banana and a coffee with milk" autofocus></textarea><span class="hint">Write it the way you'd say it. Amounts like “2”, “150 g” or “a bowl” help. Max estimates it; nothing is logged until you choose.</span></div>
+      <div class="btns" style="margin-top:12px"><button type="button" class="btn primary" data-act="describeGo">${ic("max", 16)}Estimate</button></div><div id="est-out" style="margin-top:16px"></div>`;
+    return;
+  }
+  if (tab === "photo") {
+    pane.innerHTML = `<div class="chips" style="margin-bottom:12px"><button type="button" class="chip" aria-pressed="true" data-act="photoKind" data-arg="meal">A meal</button><button type="button" class="chip" aria-pressed="false" data-act="photoKind" data-arg="label">A nutrition label</button></div>
+      <label class="btn primary" for="ph-file" style="cursor:pointer">${ic("camera", 16)}Take or choose a photo</label><input id="ph-file" type="file" accept="image/*" capture="environment" hidden>
+      <div class="field" style="margin-top:12px" id="ph-hint-f"><label for="ph-hint">Anything Max should know (optional)</label><input id="ph-hint" class="inp" maxlength="200" placeholder="e.g. large plate, cooked in oil"></div>
+      <p class="xs muted" style="margin-top:8px">The photo goes to Max to estimate. It isn't kept by the app. Nothing is logged until you choose.</p><div id="est-out" style="margin-top:16px"></div>`;
+    S.photoKind = "meal";
     return;
   }
   pane.innerHTML = `<p class="small muted">Loading…</p>`;
@@ -1780,6 +1828,67 @@ async function logSearch(q) {
   const off = q.length >= 2 ? `<div id="log-off" style="margin-top:12px"><button type="button" class="btn" data-act="offSearch" data-arg="${esc(q)}">${ic("search", 16)}Search food libraries for “${esc(q)}”</button></div>` : "";
   if (!S.logFoods.length) return `<p class="small muted">${q ? `No NutriTrace food matches “${esc(q)}” yet.` : "Your NutriTrace catalogue is empty. Type a food above to search the food libraries, scan a barcode, or add a new food."}</p>${off}`;
   return `<div class="list">${S.logFoods.map((f, i) => `<button type="button" class="li" data-act="logPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${fmtN(f.portion)} ${esc(f.unit || "")}${f.brand ? " · " + esc(f.brand) : ""} · P ${fmtN(f.protein)} · C ${fmtN(f.carbs)} · F ${fmtN(f.fat)}</span></span><span class="end"><span class="kc">${fmtN(f.kcal)} kcal</span>${ic("plus", 16)}</span></button>`).join("")}</div>${d.total > S.logFoods.length ? `<p class="xs muted">Showing ${S.logFoods.length} of ${fmtN(d.total)}. Type to narrow it down.</p>` : ""}${off}`;
+}
+
+// Max's estimates (describe or photo): tick what's right, then log.
+const CONF_WORD = { high: "Likely right", medium: "Rough", low: "Guess" };
+function drawEstimate(d) {
+  S.est = { items: d.items.map((x) => ({ ...x, on: true })), note: d.note, sample: d.sample };
+  const box = $("#est-out");
+  if (!box) return;
+  const rows = S.est.items.map((it, i) => `<label class="li" style="gap:10px;align-items:flex-start"><input type="checkbox" data-est="${i}" checked style="margin-top:4px"><span class="main"><span class="t">${esc(it.name)}${it.amount ? ` <span class="muted" style="font-weight:400">· ${esc(it.amount)}</span>` : ""}</span><span class="s">P ${fmtN(it.protein)} · C ${fmtN(it.carbs)} · F ${fmtN(it.fat)}${it.fibre != null ? ` · Fibre ${fmtN(it.fibre)}` : ""} · ${CONF_WORD[it.confidence] || "Guess"}</span></span><span class="end"><span class="kc">${fmtN(it.kcal)} kcal</span></span></label>`).join("");
+  box.innerHTML = `${d.sample ? `<p class="xs muted" style="margin-bottom:6px">${esc(d.note)}</p>` : d.note ? `<p class="small muted" style="margin-bottom:6px">${esc(d.note)}</p>` : ""}<div class="list">${rows}</div>
+    <div class="row-flex" style="gap:10px;align-items:end;flex-wrap:wrap;margin-top:12px"><div class="field" style="min-width:150px"><label for="est-meal">Meal</label><select id="est-meal" class="inp">${mealOptions(S.log.meal)}</select></div>
+    <span class="small muted" id="est-sum" style="flex:1"></span><button type="button" class="btn primary" data-act="estLog" id="est-go">Log</button></div>
+    <p class="xs muted" style="margin-top:6px">Each item goes into NutriTrace marked “Estimated”.</p>`;
+  estSum();
+}
+function estSum() {
+  const on = S.est.items.filter((x) => x.on);
+  const k = on.reduce((a, x) => a + (x.kcal || 0), 0);
+  if ($("#est-sum")) $("#est-sum").textContent = on.length ? `${on.length} item${on.length > 1 ? "s" : ""} · ${fmtN(k)} kcal` : "Nothing ticked";
+  if ($("#est-go")) { $("#est-go").textContent = on.length ? `Log ${on.length} item${on.length > 1 ? "s" : ""}` : "Log"; $("#est-go").disabled = !on.length; }
+}
+function shrinkPhoto(file) {
+  return new Promise((resolve, reject) => {
+    if (file.size > 25e6) return reject(new Error("That photo is too big."));
+    const bad = () => reject(new Error("That file isn't a photo the browser can read."));
+    const rd = new FileReader();  // a data: URL, which the page's security rules allow (blob: isn't)
+    rd.onerror = bad;
+    rd.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/jpeg", 0.8));
+      };
+      img.onerror = bad;
+      img.src = rd.result;
+    };
+    rd.readAsDataURL(file);
+  });
+}
+async function photoChosen(file) {
+  const box = $("#est-out");
+  if (!file || !box) return;
+  box.innerHTML = `<p class="small muted">Max is looking at the photo…</p>`;
+  try {
+    const image = await shrinkPhoto(file);
+    const d = await api("/api/health/log/photo", { body: { kind: S.photoKind, image, hint: ($("#ph-hint") || {}).value || "" } });
+    if (d.label) {
+      const L = d.label;
+      S.label = L;
+      const b = L.per100.kcal != null ? L.per100 : L.per_serving;
+      box.innerHTML = `<section class="panel" style="padding:14px"><b>${esc(L.name || "Food from the label")}</b>${L.brand ? ` <span class="muted">· ${esc(L.brand)}</span>` : ""}
+        <p class="small" style="margin-top:6px">${b === L.per100 ? "Per 100 g" : `Per ${esc(L.serving || "serving")}`}: ${fmtN(b.kcal)} kcal · P ${fmtN(b.protein)} · C ${fmtN(b.carbs)} · F ${fmtN(b.fat)} · Fibre ${fmtN(b.fibre)}</p>
+        ${L.unsure.length ? `<p class="xs muted">Max wasn't sure about: ${L.unsure.join(", ")}. Check them on the packet.</p>` : ""}
+        ${d.sample ? `<p class="xs muted">Sample data: on the server Max reads the label.</p>` : ""}
+        <div class="field" style="margin-top:10px"><label for="lb-name">Name</label><input id="lb-name" class="inp" maxlength="120" value="${esc(L.name)}" placeholder="No name on the label: type one"></div>
+        <div class="btns" style="margin-top:10px"><button type="button" class="btn primary" data-act="labelLog">Add and log</button></div></section>`;
+    } else drawEstimate(d);
+  } catch (e) { box.innerHTML = `<p class="small" style="color:var(--danger,#b42318)">${esc(e.message)}</p>`; }
 }
 
 // Open Food Facts and USDA results, picked to add to NutriTrace and log in one go.

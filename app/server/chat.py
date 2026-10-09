@@ -141,20 +141,24 @@ class HermesMax:
         except OSError:
             raise ChatError(503, "Max's API key file isn't readable.")
 
-    def open(self, cid, text):
+    def open(self, cid, text, image=None):
         headers = {"Content-Type": "application/json", "Accept": "text/event-stream",
                    "User-Agent": "hermes-app"}
         key = self._key()
         if key:
             headers["Authorization"] = "Bearer " + key
-        body = {"input": text, "conversation": self.prefix + cid, "stream": True, "store": True}
+        inp = text if image is None else [{"role": "user", "content": [
+            {"type": "input_text", "text": text}, {"type": "input_image", "image_url": image}]}]
+        body = {"input": inp, "conversation": self.prefix + cid, "stream": True, "store": True}
         req = urllib.request.Request(self.url + "/v1/responses", data=json.dumps(body).encode(),
                                      headers=headers, method="POST")
         try:
             return self._open(req, timeout=self.timeout)
         except urllib.error.HTTPError as e:
             msg = {401: "Max refused the app's key.", 403: "Max refused the app's key.",
-                   404: "This Hermes version has no chat endpoint."}.get(e.code, f"Max answered {e.code}.")
+                   404: "This Hermes version has no chat endpoint.",
+                   413: "That was too big for Max.", 400: "Max couldn't take that request (photos may not be supported by his model)."
+                   if image is not None else "Max answered 400."}.get(e.code, f"Max answered {e.code}.")
             raise ChatError(502, msg)
         except (urllib.error.URLError, OSError) as e:
             raise ChatError(502, f"Max isn't reachable ({type(e).__name__}).")
@@ -204,7 +208,7 @@ class DemoMax:
     def __init__(self, artifact_dir=None):
         self.artifact_dir = artifact_dir
 
-    def open(self, cid, text):
+    def open(self, cid, text, image=None):
         return text
 
     def events(self, text):

@@ -44,6 +44,7 @@ from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
 from max_library import LibraryError, MaxLibrary, SampleLibrary
 import foods as food_lookup
+import meal_estimate
 from foods import Foods, Lookup, SavedFoods
 
 VERSION = "0.8.0"
@@ -231,6 +232,7 @@ class StatusCache:
 # ---------------------------------------------------------------- HTTP
 
 MAX_BODY = 16 * 1024
+MAX_PHOTO_BODY = 1_700_000  # a shrunk meal or label photo, base64
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 
 
@@ -471,7 +473,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = -1
-            if length < 0 or length > MAX_BODY:
+            limit = MAX_PHOTO_BODY if self.path.split("?", 1)[0] == "/api/health/log/photo" else MAX_BODY
+            if length < 0 or length > limit:
                 self._json(413, {"error": "Request too large."})
                 return
             try:
@@ -700,13 +703,21 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         def _health_log(self, user, kind, body):
             """Adds one entry to NutriTrace or LiftTrace. Never edits or deletes."""
             fn = {"food-new": "add_food", "food": "log_food", "water": "log_water", "set": "log_set",
-                  "quick": "quick_add", "meal": "log_meal", "copy": "copy_meal"}.get(kind)
+                  "quick": "quick_add", "meal": "log_meal", "copy": "copy_meal",
+                  "describe": "describe", "photo": "photo", "estimate": "estimate"}.get(kind)
             if fn is None:
                 return None
             if hlog is None:
                 raise ActionError(503, "Health isn't connected on the server yet.")
             try:
-                out = getattr(hlog, fn)(body)
+                if kind in ("describe", "photo"):
+                    out = getattr(meal_estimate, fn)(body, chat)  # Max estimates; nothing is logged
+                elif kind == "estimate":
+                    out = meal_estimate.log_items(body, hlog)
+                else:
+                    out = getattr(hlog, fn)(body)
+            except ChatError as e:
+                raise ActionError(e.code, str(e))
             except ValueError as e:
                 raise ActionError(400, str(e))
             except Refused as e:
@@ -714,7 +725,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             except SourceError as e:
                 raise ActionError(503, str(e))
             # The audit line says what kind of entry was added, not what was eaten or lifted.
-            app.audit(user, "health_" + kind.replace("-", "_"), {"date": out.get("date")})
+            detail = {"kind": body.get("kind") or "meal"} if kind == "photo" else {"date": out.get("date")}
+            app.audit(user, "health_" + kind.replace("-", "_"), detail)
             return {"ok": True, **out, **app.meta()}
 
         def _strategy_post(self, user, kind, body):
