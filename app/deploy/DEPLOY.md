@@ -196,6 +196,21 @@ Test: open Health in the app. Food shows today's diary from NutriTrace; a
 bad token shows "refused the token" on the screen that needs it, and the
 rest still loads.
 
+## Health logging (food, water, gym sets)
+
+The app adds entries to NutriTrace and LiftTrace with the `hermes-write`
+tokens. It never edits or deletes. Nothing goes to Max or any model.
+
+1. Health writes must be on: `health-writes/install-health-writes.sh`
+   (switch plus tokens) and, for adding foods,
+   `health-writes/install-nutritrace-food-api.sh`.
+2. Config: add `"write_key_file": "/etc/hermes-app/health/<app>-write.key"`
+   to the nutritrace, lifttrace and cooktrace entries in the live config's
+   `health` block (see `config.example.json`), then restart hermes-app.
+3. Test: open Health > Food. Water +250 ml changes the water total; Log food
+   lists NutriTrace foods; Train > Log a set lists LiftTrace exercises.
+   Without the write key the screens say the write token isn't set up.
+
 ## Phase 5: Inbox (real Gmail, read-only)
 
 Craig's own mail, shown only to him in the app. Read-only: the app calls

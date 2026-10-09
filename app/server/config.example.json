@@ -107,16 +107,19 @@
     "nutritrace": {
       "url": "http://127.0.0.1:3001",
       "key_file": "/etc/hermes-app/health/nutritrace.key",
+      "write_key_file": "/etc/hermes-app/health/nutritrace-write.key",
       "web_url": "https://hermes-oracle.tail4abc29.ts.net:8443"
     },
     "lifttrace": {
       "url": "http://127.0.0.1:3002",
       "key_file": "/etc/hermes-app/health/lifttrace.key",
+      "write_key_file": "/etc/hermes-app/health/lifttrace-write.key",
       "web_url": "https://hermes-oracle.tail4abc29.ts.net:9443"
     },
     "cooktrace": {
       "url": "http://127.0.0.1:3003",
       "key_file": "/etc/hermes-app/health/cooktrace.key",
+      "write_key_file": "/etc/hermes-app/health/cooktrace-write.key",
       "web_url": "https://hermes-oracle.tail4abc29.ts.net:10000"
     },
     "estimator_file": "/var/lib/hermes-history/estimator.json",

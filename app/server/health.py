@@ -334,7 +334,7 @@ class Health:
                     for e in s["exercises"]:
                         last_by_ex[e["id"]] = {"date": s["date"], "top": e["top"], "reps": e["reps"]}
                 nxt = {"name": tpl.get("name"), "day_label": tpl.get("day_label"),
-                       "exercises": [{"name": x.get("exercise_name"), "target_sets": x.get("target_sets"),
+                       "exercises": [{"name": x.get("exercise_name"), "id": x.get("exercise_id"), "target_sets": x.get("target_sets"),
                                       "last": last_by_ex.get(x.get("exercise_id"))} for x in tpl.get("exercises") or []]}
             return {"sessions": sessions, "program": {
                 "active": bool(prog.get("active")), "name": prog.get("name"),

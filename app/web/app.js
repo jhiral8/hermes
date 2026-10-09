@@ -229,7 +229,7 @@ async function screenToday() {
     ${!f ? notConnected("Health", "Couldn't reach the server.") : !t ? notConnected("NutriTrace", f.day && f.day.error) : `<div class="food-hero">${ring(t.kcal, goals.kcal)}
       <div class="stack s8" style="gap:14px;width:100%"><p class="small muted">${left != null ? `${fmtN(left)} kcal left · fixed target` : "No calorie target set"}</p>
         <div class="macros">${[["protein", "Protein"], ["carbs", "Carbs"], ["fat", "Fat"], ["fibre", "Fibre"]].map(([k, l]) => `<div class="macro"><div class="l"><span>${l}</span><span>${fmtN(t[k])}<span class="muted" style="font-weight:400"> / ${fmtN(goals[k])} g</span></span></div>${hBar(t[k], goals[k])}</div>`).join("")}</div></div></div>`}
-    <div class="btns" style="margin-top:16px">${appLink(links.nutritrace, "Log food", "btn primary")}<a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a><a class="btn" href="#health/train">${ic("dumbbell", 16)}Training</a></div>
+    <div class="btns" style="margin-top:16px"><a class="btn primary" href="#health/log">${ic("plus", 16)}Log food</a><a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a><a class="btn" href="#health/train">${ic("dumbbell", 16)}Training</a></div>
   </section>`;
 
   const events = p && p.ok && p.days && p.days[0] ? p.days[0].events : [];
@@ -1118,6 +1118,67 @@ async function act(name, arg, el) {
       location.hash = `#health/draft/${code}`;
       return;
     }
+    if (name === "logPick") return openLogFood(S.logFoods[Number(arg)]);
+    if (name === "logFoodGo") {
+      const f = S.logFood;
+      const amt = Number(($("#lf-amt") || {}).value);
+      const byUnit = f.unit && f.unit !== "serving" && f.portion;
+      const quantity = byUnit ? amt / f.portion : amt;
+      if (!(quantity > 0)) return toast("Enter an amount above zero.");
+      busy(true);
+      const lg = S.log || {};
+      const r = await api("/api/health/log/food", { body: { food_id: f.id, meal: Number($("#lf-meal").value), quantity: Math.round(quantity * 100) / 100, date: lg.day } });
+      closeModal();
+      toast(`Logged ${f.name} to ${r.logged.meal || "your diary"}.`);
+      location.hash = `#health/food/${r.date}`;
+      return;
+    }
+    if (name === "foodToNt") {
+      busy(true);
+      try { await addToNt(ntFood(foodFromForm(), arg)); } finally { busy(false); }
+      return;
+    }
+    if (name === "savedToNt") {
+      const f = (S.savedFoods || []).find((x) => String(x.id) === String(arg));
+      if (!f) return toast("That saved food isn't on screen any more.");
+      busy(true);
+      try { await addToNt(ntFood(f, f.barcode)); } finally { busy(false); }
+      return;
+    }
+    if (name === "water") {
+      const [ml, day] = String(arg).split("|");
+      busy(true);
+      const r = await api("/api/health/log/water", { body: { amount_ml: Number(ml), date: day } });
+      toast(`Added ${ml} ml of water${r.total_ml != null ? ` · ${fmtN(r.total_ml)} ml logged that day` : ""}.`);
+      return render();
+    }
+    if (name === "setOpen") { const [id, nm, top] = String(arg || "").split("|"); return openSetLogger(id, nm, top); }
+    if (name === "setChange") { S.setEx = null; return openSetLogger("", "", $("#set-kg") ? $("#set-kg").value : ""); }
+    if (name === "setPickEx") {
+      const x = S.setFound[Number(arg)];
+      const kg = $("#set-kg") ? $("#set-kg").value : "";
+      openSetLogger(String(x.id), x.name, kg);
+      return;
+    }
+    if (name === "setGo") {
+      if (!S.setEx) return toast("Pick the exercise first.");
+      const reps = $("#set-reps").value, kg = $("#set-kg").value, rpe = $("#set-rpe").value;
+      if (reps === "") return toast("Enter the reps.");
+      busy(true);
+      try {
+        const body = { exercise_id: S.setEx.id, reps: Number(reps), warmup: $("#set-warm").checked };
+        if (kg !== "") body.weight = Number(kg);
+        if (rpe !== "") body.rpe = Number(rpe);
+        const r = await api("/api/health/log/set", { body });
+        S.setDone = [...(S.setDone || []), { ...r.set, exercise: r.exercise || S.setEx.name }];
+        $("#set-log").innerHTML = setLogList();
+        $("#set-reps").value = "";
+        $("#set-warm").checked = false;
+        $("#set-reps").focus();
+        toast(`Logged ${r.set.reps} × ${fmtKg(r.set.weight)} kg to LiftTrace.`);
+      } finally { busy(false); }
+      return;
+    }
     if (name === "foodSave") {
       busy(true);
       const r = await api("/api/health/foods", { body: foodFromForm() });
@@ -1274,6 +1335,13 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("input", (e) => {
   if (e.target.id === "max-in") S.chatDraft = e.target.value;
   if (e.target.id === "pal-q") { S.palHl = 0; $("#pal-res").innerHTML = paletteResults(e.target.value); }
+  if (e.target.id === "log-q") {
+    const q = e.target.value;
+    clearTimeout(S.logT);
+    S.logT = setTimeout(async () => { const html = await logSearch(q.trim()); if ($("#log-q") && $("#log-q").value === q) $("#log-res").innerHTML = html; }, 250);
+  }
+  if (e.target.id === "set-q") { const q = e.target.value.trim(); clearTimeout(S.setT); S.setT = setTimeout(() => setSearch(q), 250); }
+  if (e.target.id === "lf-amt" && S.logFood) $("#lf-sum").textContent = logSummary(S.logFood, e.target.value).replace(/<[^>]+>/g, "");
   if (e.target.id === "skill-q") {
     const q = e.target.value.trim().toLowerCase();
     document.querySelectorAll(".panel.skill").forEach((el) => { el.hidden = !!q && !el.dataset.q.includes(q); });
@@ -1281,9 +1349,10 @@ document.addEventListener("input", (e) => {
   }
 });
 
-/* ---------- Health (Phase 4, step 1: read-only) ----------
+/* ---------- Health ----------
    Food, Train, Meals & Shop and Progress from NutriTrace, LiftTrace and
-   CookTrace. Logging stays in those apps: the buttons open them. */
+   CookTrace. Food, water and gym sets are logged from here into those apps;
+   cooking and shopping stay in CookTrace for now. */
 
 const HEALTH_TABS = [["food", "Food"], ["train", "Train"], ["meals", "Meals & Shop"], ["progress", "Progress"]];
 const HEALTH_NUTS = [["kcal", "Calories", "kcal", "var(--m-k)"], ["protein", "Protein", "g", "var(--m-p)"],
@@ -1315,6 +1384,7 @@ async function screenHealth(rest) {
   if (rest[0] === "scan") return screenScan();
   if (rest[0] === "draft") return screenDraft(rest[1]);
   if (rest[0] === "saved") return screenSaved();
+  if (rest[0] === "log") return screenLog(isoDay(rest[1]), rest[2]);
   const sub = HEALTH_TABS.some(([k]) => k === rest[0]) ? rest[0] : "food";
   if (sub === "food") return screenFood(isoDay(rest[1]));
   if (sub === "train") return screenTrain();
@@ -1387,12 +1457,16 @@ async function screenFood(day) {
         <div style="margin-top:10px">${hBar(t.kcal, goals.kcal)}</div></div>
         <div class="macros">${[["protein", "Protein"], ["carbs", "Carbohydrate"], ["fat", "Fat"], ["fibre", "Fibre"]].map(([k, l]) => `<div class="macro"><div class="l"><span>${l}</span><span>${fmtN(t[k])}<span class="muted" style="font-weight:400"> / ${fmtN(goals[k])} g</span></span></div>${hBar(t[k], goals[k])}</div>`).join("")}</div>
       </div></section>
-      ${dayRec.meals.length ? `<div class="cols even">${dayRec.meals.map((m) => `<section class="panel"><div class="panel-h"><h2>${esc(m.meal)}</h2><span class="small muted num">${fmtN(m.kcal)} kcal</span></div>
-        <div class="list">${m.items.map((i) => `<div class="li"><span class="main"><span class="t">${esc(i.name)}</span><span class="s">${esc(i.amount)}${i.brand ? " · " + esc(i.brand) : ""} · P ${fmtN(i.protein)} · C ${fmtN(i.carbs)} · F ${fmtN(i.fat)}</span></span><span class="end"><span class="kc">${fmtN(i.kcal)} kcal</span></span></div>`).join("")}</div></section>`).join("")}</div>`
-        : `<div class="empty"><h3>Nothing logged for ${esc(dayName(cur))}</h3><p>Log it in NutriTrace and it appears here.</p></div>`}`;
+      ${waterPanel(t, cur, d.today)}
+      <div class="cols even">${MEAL_NAMES.map((name, mi) => {
+        const m = dayRec.meals.find((x) => x.meal === name) || { meal: name, items: [], kcal: 0 };
+        return `<section class="panel"><div class="panel-h"><h2>${esc(name)}</h2><span class="small muted num">${m.items.length ? fmtN(m.kcal) + " kcal" : ""}</span>${canLog(cur, d.today) ? `<div class="r"><a class="btn ghost sm" href="#health/log/${cur}/${mi}">${ic("plus", 15)}Add</a></div>` : ""}</div>
+        ${m.items.length ? `<div class="list">${m.items.map((i) => `<div class="li"><span class="main"><span class="t">${esc(i.name)}</span><span class="s">${esc(i.amount)}${i.brand ? " · " + esc(i.brand) : ""} · P ${fmtN(i.protein)} · C ${fmtN(i.carbs)} · F ${fmtN(i.fat)}</span></span><span class="end"><span class="kc">${fmtN(i.kcal)} kcal</span></span></div>`).join("")}</div>` : `<p class="small muted">Nothing logged.</p>`}</section>`;
+      }).join("")}</div>
+      ${dayRec.meals.filter((m) => !MEAL_NAMES.includes(m.meal)).map((m) => `<section class="panel"><div class="panel-h"><h2>${esc(m.meal)}</h2><span class="small muted num">${fmtN(m.kcal)} kcal</span></div><div class="list">${m.items.map((i) => `<div class="li"><span class="main"><span class="t">${esc(i.name)}</span><span class="s">${esc(i.amount)}</span></span><span class="end"><span class="kc">${fmtN(i.kcal)} kcal</span></span></div>`).join("")}</div></section>`).join("")}`;
 
-  return healthHead("food", "Food", `<a class="btn primary" href="#health/scan">Scan a barcode</a><a class="btn" href="#health/saved">Saved foods</a>${appLink(links.nutritrace, "Log food in NutriTrace", "btn")}`,
-      "Logging stays in NutriTrace for now. Saved foods are kept in its catalogue.") + `
+  return healthHead("food", "Food", `${canLog(cur, d.today) ? `<a class="btn primary" href="#health/log/${cur}">${ic("plus", 16)}Log food</a>` : ""}<a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a>${appLink(links.nutritrace, "Open NutriTrace", "btn")}`,
+      "Logs go straight into NutriTrace.") + `
     <div class="stack s24">
       <div class="row-flex"><div class="btns">
         <a class="iconbtn" href="#health/food/${shiftDay(cur, -1)}" aria-label="Previous day">${ic("back")}</a>
@@ -1532,7 +1606,7 @@ async function screenDraft(code) {
         </section>
         <p class="xs muted">${meta}Check against the packet before saving.</p>
       </div>
-      <div class="btns"><button type="button" class="btn primary" data-act="foodSave">Save food</button><a class="btn ghost" href="#health/food">Cancel</a></div>
+      <div class="btns"><button type="button" class="btn primary" data-act="foodToNt" data-arg="${esc(manual ? "" : code)}">Add to NutriTrace and log</button><a class="btn ghost" href="#health/food">Cancel</a></div>
     </div>`;
 }
 
@@ -1555,12 +1629,95 @@ async function screenSaved() {
   try { d = await api("/api/health/foods"); } catch (e) { err = e.message; }
   const items = d && d.items ? d.items : [];
   return healthHead("food", "Saved foods", `<a class="btn primary" href="#health/draft/manual">New food</a><a class="btn" href="#health/scan">Scan a barcode</a>`,
-      "Kept on this server. They aren't in NutriTrace yet, because it has no way to add foods from outside.") + `
+      "Saved here before NutriTrace could take foods from the app. Add one to NutriTrace to log it.") + `
     <div class="stack s24">
       ${err ? notConnected("Saved foods", err) : ""}
       ${!err && !items.length ? `<div class="empty"><h3>No saved foods yet</h3><p>Scan a barcode or enter a food by hand, and save it here.</p></div>` : ""}
-      ${items.length ? `<section class="panel"><div class="list">${items.map((f) => `<div class="li"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${esc(f.serving || "")}${f.brand ? (f.serving ? " · " : "") + esc(f.brand) : ""}${f.source ? " · " + esc(f.source) : ""}</span></span><span class="end"><span class="kc">${fmtN(f.per_serving && f.per_serving.kcal)} kcal</span></span></div>`).join("")}</div></section>` : ""}
+      ${items.length ? `<section class="panel"><div class="list">${items.map((f) => `<div class="li"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${esc(f.serving || "")}${f.brand ? (f.serving ? " · " : "") + esc(f.brand) : ""}${f.source ? " · " + esc(f.source) : ""}</span></span><span class="end"><span class="kc">${fmtN(f.per_serving && f.per_serving.kcal)} kcal</span><button type="button" class="btn sm" data-act="savedToNt" data-arg="${esc(f.id)}">Add and log</button></span></div>`).join("")}</div></section>` : ""}
     </div>`;
+}
+
+/* ---------- Logging food and water ----------
+   Foods are looked up in NutriTrace's catalogue. A food from a barcode or
+   typed in is added to the catalogue first, then logged. Nothing is ever
+   edited or deleted from here. */
+
+const MEAL_NAMES = ["Breakfast", "Lunch", "Dinner", "Snacks"];
+const canLog = (day, today) => day <= today && day >= shiftDay(today, -31);
+const mealNow = () => { const h = new Date().getHours(); return h < 11 ? 0 : h < 15 ? 1 : h < 21 ? 2 : 3; };
+
+function waterPanel(t, cur, today) {
+  const ml = t && t.water_ml != null ? t.water_ml : null;
+  return `<section class="panel"><div class="row-flex" style="align-items:center;gap:12px;flex-wrap:wrap">
+    <span class="main"><b>Water</b> <span class="small muted num">${ml == null ? "not readable" : fmtN(ml) + " ml"}</span></span>
+    ${canLog(cur, today) ? `<span class="btns" style="margin-left:auto">${[250, 500].map((n) => `<button type="button" class="btn sm" data-act="water" data-arg="${n}|${cur}">+${n} ml</button>`).join("")}</span>` : ""}
+  </div></section>`;
+}
+
+async function screenLog(day, meal) {
+  const today = (S.cache["health:food:today"] && S.cache["health:food:today"].today) || new Date().toISOString().slice(0, 10);
+  S.log = { day: day || today, meal: /^[0-3]$/.test(meal || "") ? Number(meal) : mealNow(), q: "" };
+  let saved = [];
+  try { saved = ((await api("/api/health/foods")).items) || []; } catch (_) { /* optional */ }
+  S.savedFoods = saved;
+  const first = await logSearch("");
+  return healthHead("food", "Log food", `<a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a><a class="btn" href="#health/draft/manual">${ic("plus", 16)}New food</a>`,
+      `${MEAL_NAMES[S.log.meal]} · ${dayName(S.log.day)}. Pick a food from NutriTrace, or add a new one.`) + `
+    <div class="stack s24">
+      <section class="panel"><div class="field"><label for="log-q">Search your NutriTrace foods</label><input id="log-q" class="inp" type="search" autocomplete="off" placeholder="e.g. oats, chicken, skyr" autofocus></div>
+        <div id="log-res" style="margin-top:12px">${first}</div></section>
+      ${saved.length ? `<section class="panel"><div class="panel-h"><h2>Saved here, not in NutriTrace yet</h2></div><div class="list">${saved.map((f) => `<div class="li"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${esc(f.serving || "")}${f.brand ? " · " + esc(f.brand) : ""}</span></span><span class="end"><button type="button" class="btn sm" data-act="savedToNt" data-arg="${esc(f.id)}">Add and log</button></span></div>`).join("")}</div></section>` : ""}
+    </div>`;
+}
+
+async function logSearch(q) {
+  let d;
+  try { d = await api(`/api/health/search/foods?q=${encodeURIComponent(q)}`); } catch (e) { return notConnected("NutriTrace", e.message); }
+  S.logFoods = d.foods || [];
+  if (!S.logFoods.length) return `<p class="small muted">${q ? `No NutriTrace food matches “${esc(q)}”. Scan its barcode or add it as a new food.` : "Your NutriTrace catalogue is empty. Scan a barcode or add a new food to start."}</p>`;
+  return `<div class="list">${S.logFoods.map((f, i) => `<button type="button" class="li" data-act="logPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${fmtN(f.portion)} ${esc(f.unit || "")}${f.brand ? " · " + esc(f.brand) : ""} · P ${fmtN(f.protein)} · C ${fmtN(f.carbs)} · F ${fmtN(f.fat)}</span></span><span class="end"><span class="kc">${fmtN(f.kcal)} kcal</span>${ic("plus", 16)}</span></button>`).join("")}</div>${d.total > S.logFoods.length ? `<p class="xs muted">Showing ${S.logFoods.length} of ${fmtN(d.total)}. Type to narrow it down.</p>` : ""}`;
+}
+
+function openLogFood(f) {
+  const lg = S.log || { day: new Date().toISOString().slice(0, 10), meal: mealNow() };
+  S.logFood = f;
+  const byUnit = f.unit && f.unit !== "serving" && f.portion;
+  modal(`Log ${f.name}`, `<div class="form-grid">
+    <div class="field"><label for="lf-amt">${byUnit ? `Amount (${esc(f.unit)})` : "Servings"}</label><input id="lf-amt" class="inp" type="number" inputmode="decimal" min="0" step="any" value="${byUnit ? esc(f.portion) : 1}" autofocus></div>
+    <div class="field"><label for="lf-meal">Meal</label><select id="lf-meal" class="inp">${MEAL_NAMES.map((m, i) => `<option value="${i}"${i === lg.meal ? " selected" : ""}>${m}</option>`).join("")}</select></div>
+    <div class="field full"><p class="small muted" id="lf-sum">${logSummary(f, byUnit ? f.portion : 1)}</p><p class="xs muted">Goes into NutriTrace for ${esc(dayName(lg.day))}.</p></div>
+  </div>`, `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="logFoodGo">Log it</button>`);
+}
+
+function logSummary(f, amt) {
+  const k = f.unit && f.unit !== "serving" && f.portion ? Number(amt) / f.portion : Number(amt);
+  if (!(k > 0)) return "Enter an amount.";
+  const v = (x) => (x == null ? "—" : fmtN(x * k));
+  return `${v(f.kcal)} kcal · P ${v(f.protein)} · C ${v(f.carbs)} · F ${v(f.fat)}`;
+}
+
+// A saved or typed-in food, as NutriTrace takes it: values per the portion.
+function ntFood(food, barcode) {
+  const m = /^\s*([\d.]+)\s*(g|ml)\b/i.exec(food.serving || "");
+  const has = (b) => b && b.kcal != null && b.kcal !== "";
+  const pick = (b) => Object.fromEntries(["kcal", "protein", "carbs", "fat", "fibre"].filter((k) => b[k] != null && b[k] !== "").map((k) => [k, Number(b[k])]));
+  let portion, unit, nutrition;
+  if (has(food.per_serving) && m) { portion = Number(m[1]); unit = m[2].toLowerCase(); nutrition = pick(food.per_serving); }
+  else if (has(food.per100)) { portion = 100; unit = m ? m[2].toLowerCase() : "g"; nutrition = pick(food.per100); }
+  else if (has(food.per_serving)) { portion = 1; unit = "serving"; nutrition = pick(food.per_serving); }
+  else throw new Error("Add the calories (per 100 g or per serving) first.");
+  const out = { name: (food.name || "").trim(), portion, unit, nutrition };
+  if (!out.name) throw new Error("Give the food a name first.");
+  if ((food.brand || "").trim()) out.brand = food.brand.trim();
+  if (/^\d{8,14}$/.test(barcode || "")) out.barcode = barcode;
+  return out;
+}
+
+async function addToNt(body) {
+  const r = await api("/api/health/log/food-new", { body });
+  if (r.existing) toast(`${body.name} is already in NutriTrace, so that one is used.`);
+  const f = r.food.kcal !== undefined ? r.food : { ...body, ...body.nutrition, id: r.food.id };
+  openLogFood({ ...f, id: r.food.id });
 }
 
 /* ---------- Train ---------- */
@@ -1571,8 +1728,8 @@ async function screenTrain() {
   const links = d.links || {};
   const t = d.train.ok ? d.train.data : null;
   const r = d.records && d.records.ok ? d.records.data : [];
-  const head = healthHead("train", "Train", appLink(links.lifttrace, "Open LiftTrace", "btn"),
-    "Read-only for now. Sessions are logged in LiftTrace.");
+  const head = healthHead("train", "Train", `<button type="button" class="btn primary" data-act="setOpen">${ic("plus", 16)}Log a set</button>${appLink(links.lifttrace, "Open LiftTrace", "btn")}`,
+    "Sets go straight into LiftTrace, on today's session.");
   if (!t) return head + notConnected("LiftTrace", d.train.error);
 
   const nx = t.next;
@@ -1580,8 +1737,9 @@ async function screenTrain() {
     ? `<section class="panel"><div class="panel-h"><div><div class="eyebrow">Next session</div><h2 class="h2-serif">${esc(nx.name)}</h2></div><span class="badge info">Planned</span></div>
         <p class="small muted">${esc(nx.day_label || "")}${t.program.name ? " · " + esc(t.program.name) : ""}</p>
         <div class="list" style="margin:12px 0">${nx.exercises.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span>
-          <span class="s">Target ${esc(x.target_sets != null ? x.target_sets + " sets" : "—")}${x.last ? ` · Last time ${x.last.top ? fmtN(x.last.top) + " kg · " : ""}${esc((x.last.reps || []).join(", "))} reps` : " · No record yet"}</span></span></div>`).join("")}</div>
-        ${appLink(links.lifttrace, "Open session in LiftTrace", "btn primary lg")}</section>`
+          <span class="s">Target ${esc(x.target_sets != null ? x.target_sets + " sets" : "—")}${x.last ? ` · Last time ${x.last.top ? fmtN(x.last.top) + " kg · " : ""}${esc((x.last.reps || []).join(", "))} reps` : " · No record yet"}</span></span>
+          <span class="end"><button type="button" class="btn sm" data-act="setOpen" data-arg="${esc(String(x.id ?? ""))}|${esc(x.name || "")}|${esc(x.last && x.last.top ? x.last.top : "")}">${ic("plus", 15)}Log set</button></span></div>`).join("")}</div>
+        ${appLink(links.lifttrace, "Open session in LiftTrace", "btn lg")}</section>`
     : `<section class="panel"><p class="small muted">No active programme in LiftTrace.</p></section>`;
 
   const sessions = t.sessions.length
@@ -1601,6 +1759,35 @@ async function screenTrain() {
     : "";
 
   return head + `<div class="stack s24"><div class="cols"><div class="stack s24">${next}${sessions}</div><div class="stack s24">${programme}${records}</div></div></div>`;
+}
+
+function openSetLogger(id, name, top) {
+  S.setEx = /^\d+$/.test(id || "") ? { id: Number(id), name } : null;
+  S.setDone = S.setDone || [];
+  modal("Log a set", `<div class="form-grid">
+    <div class="field full"><label for="set-q">Exercise</label>
+      ${S.setEx ? `<div class="row-flex" style="gap:8px"><b id="set-ex">${esc(S.setEx.name)}</b><button type="button" class="btn ghost sm" data-act="setChange">Change</button></div>`
+        : `<input id="set-q" class="inp" type="search" autocomplete="off" placeholder="Search LiftTrace exercises" value="${esc(name || "")}" autofocus><div id="set-res" style="margin-top:8px"></div>`}</div>
+    <div class="field"><label for="set-reps">Reps</label><input id="set-reps" class="inp" type="number" inputmode="numeric" min="0" step="1"${S.setEx ? " autofocus" : ""}></div>
+    <div class="field"><label for="set-kg">Weight (kg)</label><input id="set-kg" class="inp" type="number" inputmode="decimal" min="0" step="0.5" value="${esc(top || "")}"></div>
+    <div class="field"><label for="set-rpe">RPE (optional)</label><input id="set-rpe" class="inp" type="number" inputmode="decimal" min="1" max="10" step="0.5"></div>
+    <div class="field"><label class="row-flex" style="gap:8px;align-items:center;margin-top:26px"><input id="set-warm" type="checkbox">Warm-up set</label></div>
+    <div class="field full" id="set-log">${setLogList()}</div>
+  </div>`, `<button type="button" class="btn ghost" data-act="close">Done</button><button type="button" class="btn primary" data-act="setGo">Log set</button>`);
+  if (!S.setEx && name) setSearch(name);
+}
+
+const fmtKg = (n) => (n == null || isNaN(n) ? "—" : String(Math.round(Number(n) * 100) / 100));
+const setLogList = () => (S.setDone && S.setDone.length ? `<div class="eyebrow">Logged this time</div><div class="list">${S.setDone.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.exercise || "")}</span><span class="s">${x.warmup ? "Warm-up · " : ""}${esc(x.reps)} × ${fmtKg(x.weight)} kg${x.rpe ? " · RPE " + esc(x.rpe) : ""}</span></span></div>`).join("")}</div>` : "");
+
+async function setSearch(q) {
+  const box = $("#set-res");
+  if (!box) return;
+  try {
+    const d = await api(`/api/health/search/exercises?q=${encodeURIComponent(q)}`);
+    S.setFound = d.exercises || [];
+    box.innerHTML = S.setFound.length ? `<div class="list">${S.setFound.slice(0, 8).map((x, i) => `<button type="button" class="li" data-act="setPickEx" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${esc(x.equipment || x.category || "")}</span></span></button>`).join("")}</div>` : `<p class="small muted">No exercise matches “${esc(q)}”.</p>`;
+  } catch (e) { box.innerHTML = notConnected("LiftTrace", e.message); }
 }
 
 /* ---------- Meals & Shop ---------- */
