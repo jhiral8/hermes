@@ -24,12 +24,13 @@ from pathlib import Path
 from sources import SourceError
 
 OFF_URL = "https://world.openfoodfacts.org/api/v2/product/{code}.json"
-OFF_FIELDS = "product_name,brands,serving_size,nutriments"
+OFF_FIELDS = "product_name,brands,serving_size,nutriments,countries_tags"
 OFF_SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
 SEARCH_SIZE = 20
 USDA_SEARCH_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
 # Generic foods only (raw, cooked, typical dishes); branded USDA foods are mostly US products.
-USDA_TYPES = "Foundation,SR Legacy,Survey (FNDDS)"
+# Survey (FNDDS) is left out: its brackets make USDA answer 400 about one search in four.
+USDA_TYPES = "Foundation,SR Legacy"
 # FoodData Central nutrient ids. Energy comes under several ids depending on the data type.
 USDA_IDS = {"protein": (1003,), "carbs": (1005,), "fat": (1004,), "fibre": (1079,), "kcal": (1008, 2048, 2047)}
 USDA_KJ = 1062
@@ -139,7 +140,7 @@ class Lookup:
                     data = json.loads(r.read() or b"null")
                 break
             except urllib.error.HTTPError as e:
-                if attempt == 2 or e.code in (400, 401, 403, 404, 429):
+                if attempt == 2 or e.code in (401, 403, 404, 429):  # a 400 is USDA's flake; one retry clears it
                     raise SourceError(f"USDA FoodData Central answered {e.code}")
             except (urllib.error.URLError, OSError):
                 if attempt == 2:
@@ -195,9 +196,10 @@ class Lookup:
             {"search_terms": q, "search_simple": 1, "action": "process", "json": 1,
              "page_size": SEARCH_SIZE, "fields": "code," + OFF_FIELDS}))
         items = []
-        for p in (data or {}).get("products") or []:
-            if not isinstance(p, dict):
-                continue
+        # UK products first (stable), so British items aren't mixed in with French and US ones.
+        products = [p for p in (data or {}).get("products") or [] if isinstance(p, dict)]
+        products.sort(key=lambda p: "en:united-kingdom" not in (p.get("countries_tags") or []))
+        for p in products:
             item = _product(p, str(p.get("code") or ""), now)
             if not item["name"] or (item["per100"]["kcal"] is None and item["per_serving"]["kcal"] is None):
                 continue

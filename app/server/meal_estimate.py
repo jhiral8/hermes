@@ -187,7 +187,8 @@ def photo(body, chat):
                + ITEM_RULES + (f"\n\nWhat I said about it (trust this over the photo for amounts and hidden items): {hint}" if hint else ""), image=image)
     items = clean_items(got)
     if not items:
-        raise SourceError("Max couldn't make out the food in that photo. Try again, or describe it instead.")
+        # Max's model can't see photos yet, so a photo often comes back with no food in it.
+        raise SourceError("Max can't read photos yet. Describe the meal in the box instead.")
     return {"items": items, "note": str((got or {}).get("note") or "")[:300]}
 
 
