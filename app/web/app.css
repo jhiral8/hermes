@@ -69,3 +69,8 @@ a.spark-card { text-decoration: none; color: inherit; }
 .slot.empty { min-height: 34px; }
 .mp-list { display: none; }
 @media (max-width: 900px) { .mp-grid { display: none; } .mp-list { display: flex; } }
+
+/* Log food: ways to log */
+.tabs.sub button{min-height:32px;padding:0 12px;border:0;border-radius:8px;margin:0;background:transparent}
+.tabs.sub button:hover{background:var(--fill)}
+.tabs.sub button[aria-pressed="true"]{background:var(--fill-2);color:var(--fg)}

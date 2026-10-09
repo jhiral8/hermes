@@ -190,10 +190,32 @@ class Usda(unittest.TestCase):
         with self.assertRaises(SourceError):
             Lookup({}, opener=sample_opener).usda_search("rice")
         with self.assertRaises(SourceError) as e:
-            Lookup({"usda_key_file": key("secretkey")}, opener=Fake(fail=403)).usda_search("rice")
+            Lookup({"usda_key_file": key("secretkey"), "retry_wait": 0}, opener=Fake(fail=500)).usda_search("rice")
         self.assertNotIn("secretkey", str(e.exception))
         with self.assertRaises(SourceError):
             Lookup({"usda_key_file": "/nonexistent/usda.key"}, opener=sample_opener).usda_search("rice")
+
+    def test_usda_retries_once_and_uses_us_spelling(self):
+        calls = []
+        def flaky(req, timeout=None):
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(req.full_url, 500, "no", {}, io.BytesIO(b""))
+            return sample_opener(req, timeout)
+        lk = Lookup({"retry_wait": 0}, opener=flaky, usda_key="k")
+        out = lk.usda_search("Greek yoghurt")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("query=greek+yogurt", calls[0])
+        self.assertEqual(out["query"], "Greek yoghurt")
+        self.assertEqual(out["items"][0]["name"], "Yogurt, Greek, plain, nonfat")
+        both_fail = Fake(fail=502)
+        with self.assertRaises(SourceError):
+            Lookup({"retry_wait": 0}, opener=both_fail, usda_key="k").usda_search("rice")
+        self.assertEqual(len(both_fail.calls), 2)
+        bad_key = Fake(fail=403)
+        with self.assertRaises(SourceError):
+            Lookup({"retry_wait": 0}, opener=bad_key, usda_key="k").usda_search("rice")
+        self.assertEqual(len(bad_key.calls), 1)
 
     def test_unknown_library_refused(self):
         with self.assertRaises(ValueError):

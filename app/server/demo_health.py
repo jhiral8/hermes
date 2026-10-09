@@ -30,10 +30,10 @@ def _day_items(d):
         if rnd.random() < 0.15:
             continue
         k = rnd.uniform(0.85, 1.2)
-        items.append({"name": name, "brand": brand, "meal": meal, "quantity": round(q * k) if unit == "g" else q,
+        items.append({"name": name, "brand": brand, "meal": meal, "quantity": round(k, 2), "portion": q,
+                      "food_server_id": FOODS.index((meal, name, brand, q, unit, kcal, p, c, f, fib)) + 1,
                       "unit": unit, "source": "off", "nutrition": {
-                          "calories": round(kcal * k), "proteins": round(p * k, 1), "carbohydrates": round(c * k, 1),
-                          "fat": round(f * k, 1), "fiber": round(fib * k, 1)}})
+                          "calories": kcal, "proteins": p, "carbohydrates": c, "fat": f, "fiber": fib}})
     return items
 
 
@@ -41,7 +41,7 @@ def _totals(items):
     t = {k: 0 for k in ("calories", "proteins", "carbohydrates", "fat", "fiber")}
     for i in items:
         for k in t:
-            t[k] += i["nutrition"].get(k) or 0
+            t[k] += (i["nutrition"].get(k) or 0) * (i.get("quantity") or 1)
     return {k: round(v, 1) for k, v in t.items()}
 
 
@@ -71,6 +71,9 @@ def _workouts(today):
 CATALOG = [{"id": n + 1, "name": name, "brand": brand, "portion": q, "unit": unit, "barcode": None,
             "nutrition": {"calories": kcal, "proteins": p, "carbohydrates": c, "fat": f, "fiber": fib}}
            for n, (_, name, brand, q, unit, kcal, p, c, f, fib) in enumerate(FOODS)]
+# Saved meals: (food id, quantity) pairs.
+MEALS_SAVED = [{"id": 1, "name": "Usual breakfast", "favorite": 1, "usage_count": 12, "items": [(1, 1), (2, 1)]},
+               {"id": 2, "name": "Chicken, rice and greens", "favorite": 0, "usage_count": 5, "items": [(3, 1), (4, 1), (5, 1)]}]
 LOGGED = {}   # date -> extra diary items
 WATER = {}    # date -> ml
 
@@ -116,12 +119,19 @@ def write(host, path, body):
         if f is None:
             raise _http(400, {"error": f"food_id {body['food_id']} not found in your catalog."})
         k = body.get("quantity") or 1
-        item = {"name": f["name"], "brand": f["brand"], "meal": body.get("meal", 0), "quantity": f["portion"] * k,
-                "unit": f["unit"], "source": "hermes",
-                "nutrition": {n: round(v * k, 1) for n, v in f["nutrition"].items()}}
+        item = {"name": f["name"], "brand": f["brand"], "meal": body.get("meal", 0), "quantity": k,
+                "portion": f["portion"], "unit": f["unit"], "source": "hermes", "food_server_id": f["id"],
+                "nutrition": dict(f["nutrition"])}
         LOGGED.setdefault(parts[1], []).append(item)
         return {"ok": True, "date": parts[1], "logged": {"food_id": f["id"], "name": f["name"], "meal": item["meal"],
                                                           "portion": f["portion"], "unit": f["unit"], "quantity": k}}
+    if host.startswith("nutritrace") and parts[0] == "diary" and parts[2] == "meal":
+        m = next((x for x in MEALS_SAVED if x["id"] == body.get("meal_id")), None)
+        if m is None:
+            raise _http(400, {"error": f"meal_id {body.get('meal_id')} not found in your catalog."})
+        for fid, k in m["items"]:
+            write(host, f"/diary/{parts[1]}/food", {"food_id": fid, "meal": body.get("meal", 0), "quantity": k})
+        return {"ok": True, "date": parts[1], "count": len(m["items"])}
     if host.startswith("nutritrace") and parts[0] == "diary" and parts[2] == "water":
         WATER[parts[1]] = WATER.get(parts[1], 0) + body["amount_ml"]
         return {"ok": True, "date": parts[1], "total_ml_on_day": WATER[parts[1]]}
@@ -165,6 +175,19 @@ def answer(host, path, q, today):
             term = (q.get("q") or "").lower()
             items = [f for f in CATALOG if term in f["name"].lower() or term in (f["brand"] or "").lower()]
             return {"items": items[:int(q.get("limit") or 25)], "total": len(items)}
+        if parts[0] == "meals":
+            term = (q.get("query") or "").lower()
+            out = []
+            for m in MEALS_SAVED:
+                if term not in m["name"].lower():
+                    continue
+                nut = {}
+                for fid, k in m["items"]:
+                    for n, v in CATALOG[fid - 1]["nutrition"].items():
+                        nut[n] = round(nut.get(n, 0) + v * k, 1)
+                out.append({"id": m["id"], "name": m["name"], "is_recipe": False, "nutrition": nut,
+                            "favorite": bool(m["favorite"]), "usage_count": m["usage_count"]})
+            return {"items": out, "count": len(out)}
         if parts[0] == "goals":
             return {"goals": {"calories": 2300, "proteins": 170, "carbohydrates": 240, "fat": 75, "fiber": 30},
                     "water_goal_ml": 2500}

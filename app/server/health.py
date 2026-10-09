@@ -56,6 +56,12 @@ def nutrients(obj):
     return {name: _find(obj or {}, keys) for name, keys in NUTRIENTS.items()}
 
 
+def _times(nut, q):
+    """A diary item's nutrition is per serving; quantity is the number of servings."""
+    k = q if isinstance(q, (int, float)) and q > 0 else 1
+    return {n: (round(v * k, 1) if isinstance(v, (int, float)) else v) for n, v in nut.items()}
+
+
 def per_serving(recipe):
     """CookTrace stores a recipe's nutrition for the whole recipe; split it by servings."""
     servings = recipe.get("servings")
@@ -245,13 +251,18 @@ class Health:
             for i in diary.get("items") or []:
                 m = i.get("meal")
                 label = MEALS.get(m, f"Meal {m}") if isinstance(m, int) else (m or "Other")
+                q, por = i.get("quantity"), i.get("portion")
+                amt = round(por * (q if isinstance(q, (int, float)) else 1), 1) if isinstance(por, (int, float)) else q
+                if isinstance(amt, float) and amt.is_integer():
+                    amt = int(amt)
                 meals.setdefault(label, []).append({
                     "name": i.get("name") or "?", "brand": i.get("brand"),
-                    "amount": " ".join(str(x) for x in (i.get("quantity"), i.get("unit")) if x not in (None, "")),
-                    "source": i.get("source"), **nutrients(i.get("nutrition") or {})})
+                    "amount": " ".join(str(x) for x in (amt, i.get("unit")) if x not in (None, "")),
+                    "source": i.get("source"), **_times(nutrients(i.get("nutrition") or {}), q)})
             order = list(MEALS.values())
             return {"date": d.isoformat(), "totals": self.day_totals(d),
-                    "meals": [{"meal": k, "items": meals[k], "kcal": sum((x["kcal"] or 0) for x in meals[k])}
+                    "meals": [{"meal": k, "index": order.index(k) if k in order else None, "items": meals[k],
+                               "kcal": sum((x["kcal"] or 0) for x in meals[k])}
                               for k in sorted(meals, key=lambda k: order.index(k) if k in order else 99)]}
 
         def build_week():

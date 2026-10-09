@@ -639,6 +639,14 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     except SourceError as e:
                         self._json(503, {"ok": False, "error": str(e), **app.meta()})
                         return
+                elif what in ("log/recent", "log/meals"):
+                    if hlog is None:
+                        raise ActionError(503, "Health isn't connected on the server yet.")
+                    try:
+                        out = hlog.recent_foods() if what == "log/recent" else hlog.saved_meals((q.get("q") or [""])[0])
+                    except SourceError as e:
+                        self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                        return
                 elif what in ("search/foods", "search/exercises"):
                     term = (q.get("q") or [""])[0]
                     try:
@@ -691,7 +699,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
 
         def _health_log(self, user, kind, body):
             """Adds one entry to NutriTrace or LiftTrace. Never edits or deletes."""
-            fn = {"food-new": "add_food", "food": "log_food", "water": "log_water", "set": "log_set"}.get(kind)
+            fn = {"food-new": "add_food", "food": "log_food", "water": "log_water", "set": "log_set",
+                  "quick": "quick_add", "meal": "log_meal", "copy": "copy_meal"}.get(kind)
             if fn is None:
                 return None
             if hlog is None:

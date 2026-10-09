@@ -1123,6 +1123,51 @@ async function act(name, arg, el) {
     }
     if (name === "logPick") return openLogFood(S.logFoods[Number(arg)]);
     if (name === "offSearch") return await offSearch(arg, el);
+    if (name === "logTab") return await logTab(arg);
+    if (name === "quickAdd") {
+      const num = (id) => { const v = ($(id) || {}).value; return v === "" || v == null ? null : Number(v); };
+      const kcal = num("#qa-kcal");
+      if (!(kcal > 0)) return toast("Enter the calories.");
+      busy(true);
+      try {
+        const body = { kcal, name: ($("#qa-name").value || "").trim() || null, meal: Number($("#qa-meal").value), date: S.log.day };
+        ["protein", "carbs", "fat"].forEach((k) => { const v = num("#qa-" + k); if (v != null) body[k] = v; });
+        const r = await api("/api/health/log/quick", { body });
+        toast(`Logged ${fmtN(kcal)} kcal to ${r.logged.meal || "your diary"}.`);
+        location.hash = `#health/food/${r.date}`;
+      } finally { busy(false); }
+      return;
+    }
+    if (name === "mealPick") {
+      const m = (S.savedMeals || [])[Number(arg)];
+      if (!m) return toast("That meal isn't on screen any more.");
+      const lg = S.log;
+      modal(`Log ${m.name}`, `<div class="form-grid"><div class="field"><label for="sm-meal">Meal</label><select id="sm-meal" class="inp">${mealOptions(lg.meal)}</select></div>
+        <div class="field full"><p class="small muted">${fmtN(m.kcal)} kcal · P ${fmtN(m.protein)} · C ${fmtN(m.carbs)} · F ${fmtN(m.fat)}. Goes into NutriTrace for ${esc(dayName(lg.day))}.</p></div></div>`,
+        `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="mealGo" data-arg="${m.id}">Log it</button>`);
+      return;
+    }
+    if (name === "mealGo") {
+      busy(true);
+      try {
+        const r = await api("/api/health/log/meal", { body: { meal_id: Number(arg), meal: Number($("#sm-meal").value), date: S.log.day } });
+        closeModal();
+        toast(`Logged to ${r.meal || "your diary"}.`);
+        location.hash = `#health/food/${r.date}`;
+      } finally { busy(false); }
+      return;
+    }
+    if (name === "copyMeal") {
+      const [from, fm, to, tm] = String(arg).split("|");
+      busy(true);
+      try {
+        const r = await api("/api/health/log/copy", { body: { from_date: from, from_meal: Number(fm), date: to, meal: tm == null ? Number(fm) : Number(tm) } });
+        toast(`Logged ${r.logged.length} food${r.logged.length > 1 ? "s" : ""} to ${r.meal}${r.skipped.length ? `. Skipped ${r.skipped.join(", ")}` : ""}.`);
+        location.hash = `#health/food/${r.date}`;
+        if (location.hash === `#health/food/${r.date}`) render();
+      } finally { busy(false); }
+      return;
+    }
     if (name === "offPick") {
       const f = (S.offFoods || [])[Number(arg)];
       if (!f) return toast("That result isn't on screen any more.");
@@ -1473,7 +1518,7 @@ async function screenFood(day) {
       ${waterPanel(t, cur, d.today)}
       <div class="cols even">${MEAL_NAMES.map((name, mi) => {
         const m = dayRec.meals.find((x) => x.meal === name) || { meal: name, items: [], kcal: 0 };
-        return `<section class="panel"><div class="panel-h"><h2>${esc(name)}</h2><span class="small muted num">${m.items.length ? fmtN(m.kcal) + " kcal" : ""}</span>${canLog(cur, d.today) ? `<div class="r"><a class="btn ghost sm" href="#health/log/${cur}/${mi}">${ic("plus", 15)}Add</a></div>` : ""}</div>
+        return `<section class="panel"><div class="panel-h"><h2>${esc(name)}</h2><span class="small muted num">${m.items.length ? fmtN(m.kcal) + " kcal" : ""}</span>${canLog(cur, d.today) ? `<div class="r">${cur < d.today && m.items.length ? `<button type="button" class="btn ghost sm" data-act="copyMeal" data-arg="${cur}|${mi}|${d.today}">Log again today</button>` : ""}<a class="btn ghost sm" href="#health/log/${cur}/${mi}">${ic("plus", 15)}Add</a></div>` : ""}</div>
         ${m.items.length ? `<div class="list">${m.items.map((i) => `<div class="li"><span class="main"><span class="t">${esc(i.name)}</span><span class="s">${esc(i.amount)}${i.brand ? " · " + esc(i.brand) : ""} · P ${fmtN(i.protein)} · C ${fmtN(i.carbs)} · F ${fmtN(i.fat)}</span></span><span class="end"><span class="kc">${fmtN(i.kcal)} kcal</span></span></div>`).join("")}</div>` : `<p class="small muted">Nothing logged.</p>`}</section>`;
       }).join("")}</div>
       ${dayRec.meals.filter((m) => !MEAL_NAMES.includes(m.meal)).map((m) => `<section class="panel"><div class="panel-h"><h2>${esc(m.meal)}</h2><span class="small muted num">${fmtN(m.kcal)} kcal</span></div><div class="list">${m.items.map((i) => `<div class="li"><span class="main"><span class="t">${esc(i.name)}</span><span class="s">${esc(i.amount)}</span></span><span class="end"><span class="kc">${fmtN(i.kcal)} kcal</span></span></div>`).join("")}</div></section>`).join("")}`;
@@ -1678,10 +1723,54 @@ async function screenLog(day, meal) {
   return healthHead("food", "Log food", `<a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a><a class="btn" href="#health/draft/manual">${ic("plus", 16)}New food</a>`,
       `${MEAL_NAMES[S.log.meal]} · ${dayName(S.log.day)}. Pick a food from NutriTrace or the food libraries, or add a new one.`) + `
     <div class="stack s24">
-      <section class="panel"><div class="field"><label for="log-q">Search foods</label><input id="log-q" class="inp" type="search" autocomplete="off" placeholder="e.g. oats, chicken, skyr" autofocus></div>
+      <nav class="tabs sub" aria-label="Ways to log">${LOG_TABS.map(([k, t]) => `<button type="button" data-act="logTab" data-arg="${k}" aria-pressed="${k === "search"}">${t}</button>`).join("")}</nav>
+      <section class="panel" id="log-pane"><div class="field"><label for="log-q">Search foods</label><input id="log-q" class="inp" type="search" autocomplete="off" placeholder="e.g. oats, chicken, skyr" autofocus></div>
         <div id="log-res" style="margin-top:12px">${first}</div></section>
       ${saved.length ? `<section class="panel"><div class="panel-h"><h2>Saved here, not in NutriTrace yet</h2></div><div class="list">${saved.map((f) => `<div class="li"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${esc(f.serving || "")}${f.brand ? " · " + esc(f.brand) : ""}</span></span><span class="end"><button type="button" class="btn sm" data-act="savedToNt" data-arg="${esc(f.id)}">Add and log</button></span></div>`).join("")}</div></section>` : ""}
     </div>`;
+}
+
+const LOG_TABS = [["search", "Search"], ["recent", "Recent"], ["meals", "Saved meals"], ["quick", "Quick add"]];
+const mealOptions = (sel) => MEAL_NAMES.map((m, i) => `<option value="${i}"${i === sel ? " selected" : ""}>${m}</option>`).join("");
+
+async function logTab(tab) {
+  document.querySelectorAll('[data-act="logTab"]').forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.arg === tab)));
+  const pane = $("#log-pane");
+  if (!pane) return;
+  const lg = S.log;
+  if (tab === "search") {
+    pane.innerHTML = `<div class="field"><label for="log-q">Search foods</label><input id="log-q" class="inp" type="search" autocomplete="off" placeholder="e.g. oats, chicken, skyr"></div><div id="log-res" style="margin-top:12px">${await logSearch("")}</div>`;
+    $("#log-q").focus();
+    return;
+  }
+  if (tab === "quick") {
+    pane.innerHTML = `<p class="small muted" style="margin-bottom:12px">Just the numbers, for something you can't find. It's saved in NutriTrace as a “Quick add” food.</p>
+      <div class="form-grid">
+        <div class="field"><label for="qa-kcal">Calories (kcal)</label><input id="qa-kcal" class="inp num" type="number" inputmode="decimal" min="1" max="5000" autofocus></div>
+        <div class="field"><label for="qa-name">Name (optional)</label><input id="qa-name" class="inp" maxlength="60" placeholder="e.g. Office cake"></div>
+        ${[["protein", "Protein (g)"], ["carbs", "Carbs (g)"], ["fat", "Fat (g)"]].map(([k, l]) => `<div class="field"><label for="qa-${k}">${l}</label><input id="qa-${k}" class="inp num" type="number" inputmode="decimal" min="0" max="500" placeholder="Unknown"></div>`).join("")}
+        <div class="field"><label for="qa-meal">Meal</label><select id="qa-meal" class="inp">${mealOptions(lg.meal)}</select></div>
+      </div>
+      <div class="btns" style="margin-top:14px"><button type="button" class="btn primary" data-act="quickAdd">Log it</button></div>`;
+    return;
+  }
+  pane.innerHTML = `<p class="small muted">Loading…</p>`;
+  if (tab === "recent") {
+    let d;
+    try { d = await api("/api/health/log/recent"); } catch (e) { pane.innerHTML = notConnected("NutriTrace", e.message); return; }
+    S.logFoods = d.foods || [];
+    const y = shiftDay(lg.day, -1);
+    pane.innerHTML = `<div class="row-flex" style="gap:8px;flex-wrap:wrap;margin-bottom:12px"><span class="small muted">Same as yesterday:</span>${MEAL_NAMES.map((m, i) => `<button type="button" class="chip" data-act="copyMeal" data-arg="${y}|${i}|${lg.day}|${lg.meal}">${m}</button>`).join("")}</div>
+      ${S.logFoods.length ? `<div class="list">${S.logFoods.map((f, i) => `<button type="button" class="li" data-act="logPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${fmtN(f.portion)} ${esc(f.unit || "")}${f.brand ? " · " + esc(f.brand) : ""} · ${f.times > 1 ? `${f.times} times` : "once"} in 2 weeks${f.meal ? " · usually " + esc(f.meal.toLowerCase()) : ""}</span></span><span class="end"><span class="kc">${fmtN(f.kcal)} kcal</span>${ic("plus", 16)}</span></button>`).join("")}</div>` : `<p class="small muted">Nothing logged in the last two weeks.</p>`}`;
+    return;
+  }
+  if (tab === "meals") {
+    let d;
+    try { d = await api("/api/health/log/meals"); } catch (e) { pane.innerHTML = notConnected("NutriTrace", e.message); return; }
+    S.savedMeals = d.meals || [];
+    pane.innerHTML = (S.savedMeals.length ? `<div class="list">${S.savedMeals.map((m, i) => `<button type="button" class="li" data-act="mealPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${m.favourite ? "★ " : ""}${esc(m.name)}</span><span class="s">P ${fmtN(m.protein)} · C ${fmtN(m.carbs)} · F ${fmtN(m.fat)}${m.uses ? ` · used ${m.uses} times` : ""}</span></span><span class="end"><span class="kc">${fmtN(m.kcal)} kcal</span>${ic("plus", 16)}</span></button>`).join("")}</div>` : `<p class="small muted">No saved meals yet.</p>`)
+      + `<p class="xs muted" style="margin-top:10px">Saved meals are made in NutriTrace. To repeat a meal from another day, use “Log again today” on the Food page, or the buttons under Recent.</p>`;
+  }
 }
 
 async function logSearch(q) {

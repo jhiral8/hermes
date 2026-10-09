@@ -3,9 +3,7 @@ into LiftTrace.
 
 Writes use the "hermes-write" tokens (mcp:write), separate from the read
 tokens. Everything is checked here before it is sent, and the Trace apps
-check again. Nothing is deleted or edited from here, only added. Health data
-goes only between Craig's browser and the Trace apps: none of it is passed
-to Max or any model.
+check again. Nothing is deleted or edited from here, only added.
 """
 
 import datetime
@@ -92,7 +90,113 @@ class HealthLog:
                                "equipment": x.get("equipment"), "set_type": x.get("set_type")}
                               for x in out.get("exercises") or []]}
 
+    def recent_foods(self, days=14):
+        """Foods logged in the last two weeks, newest first, one row per food, ready to log again."""
+        nt = self.h._need(self.h.nt, "NutriTrace")
+        today = self.h.today()
+        seen = {}
+        for n in range(days):
+            d = today - datetime.timedelta(days=n)
+            try:
+                diary = nt.get(f"/diary/{d.isoformat()}", ttl=self.h._ttl(d)) or {}
+            except SourceError:
+                if n == 0:
+                    raise
+                continue
+            for i in reversed(diary.get("items") or []):
+                fid = i.get("food_server_id") or i.get("food_id")
+                if not isinstance(fid, int):
+                    continue
+                if fid in seen:
+                    seen[fid]["times"] += 1
+                    continue
+                per = nutrients(i.get("nutrition") or {})  # NutriTrace keeps nutrition per serving
+                portion = i.get("portion")
+                seen[fid] = {"id": fid, "name": i.get("name") or "?", "brand": i.get("brand"),
+                             "portion": portion, "unit": i.get("unit"), **per,
+                             "last": d.isoformat(), "times": 1, "meal": MEALS.get(i.get("meal"))}
+        return {"foods": list(seen.values())[:40]}
+
+    def saved_meals(self, q):
+        """NutriTrace's saved meals (not recipes), favourites and most used first."""
+        nt = self.h._need(self.h.nt, "NutriTrace")
+        q = (q or "").strip()[:80]
+        out = nt.get("/meals/search", ttl=60, query=q or None, limit=30) or {}
+        return {"meals": [{"id": m.get("id"), "name": m.get("name"), "favourite": bool(m.get("favorite")),
+                           "uses": m.get("usage_count"), **nutrients(m.get("nutrition") or {})}
+                          for m in out.get("items") or [] if not m.get("is_recipe")]}
+
     # ------------------------------------------------------------ writes
+
+    def log_meal(self, body):
+        """Log one of NutriTrace's saved meals onto a day."""
+        nt = self.h._need(self.h.nt, "NutriTrace")
+        meal_id = _number(body, "meal_id", 1, 10 ** 9, required=True, whole=True)
+        meal = _number(body, "meal", 0, max(MEALS), whole=True)
+        d = self._date(body)
+        payload = {"meal_id": meal_id}
+        if meal is not None:
+            payload["meal"] = meal
+        out = nt.send("POST", f"/diary/{d}/meal", payload) or {}
+        return {"date": d, "meal": MEALS.get(meal), "count": out.get("count") or len(out.get("items") or []) or None}
+
+    def quick_add(self, body):
+        """Calories (and macros if known) with no food picked. Kept in NutriTrace as a "Quick add" food
+        whose name carries its values, so the same numbers reuse the same food."""
+        kcal = _number(body, "kcal", 1, 5000, required=True)
+        nut = {"kcal": kcal}
+        for k in ("protein", "carbs", "fat", "fibre"):
+            v = _number(body, k, 0, 500)
+            if v is not None:
+                nut[k] = v
+        label = _text(body, "name", 60) or "Quick add"
+        bits = [f"{kcal:g} kcal"] + [f"{k[0].upper()} {nut[k]:g}" for k in ("protein", "carbs", "fat") if k in nut]
+        made = self.add_food({"name": f"{label} · {' · '.join(bits)}", "brand": "Quick add", "portion": 1,
+                              "unit": "serving", "nutrition": nut})
+        out = self.log_food({"food_id": made["food"]["id"], "meal": body.get("meal"), "quantity": 1,
+                             "date": body.get("date")})
+        return out
+
+    def copy_meal(self, body):
+        """Log again every food from one meal on an earlier day (same amounts) onto a day."""
+        nt = self.h._need(self.h.nt, "NutriTrace")
+        src = body.get("from_date")
+        if not isinstance(src, str) or not DATE.fullmatch(src):
+            raise ValueError("from_date must look like 2026-10-09.")
+        from_meal = _number(body, "from_meal", 0, max(MEALS), required=True, whole=True)
+        meal = _number(body, "meal", 0, max(MEALS), whole=True)
+        d = self._date(body)
+        diary = nt.get(f"/diary/{src}", ttl=30) or {}
+        items = [i for i in diary.get("items") or [] if i.get("meal") == from_meal]
+        if not items:
+            raise ValueError("That meal has nothing logged.")
+        logged, skipped = [], []
+        for i in items:
+            fid = i.get("food_server_id") or i.get("food_id")
+            if not isinstance(fid, int):
+                skipped.append(i.get("name") or "?")
+                continue
+            payload = {"food_id": fid, "meal": meal if meal is not None else from_meal,
+                       "quantity": i.get("quantity") or 1}
+            if isinstance(i.get("portion"), (int, float)):
+                payload["portion"] = i["portion"]
+            try:
+                nt.send("POST", f"/diary/{d}/food", payload)
+            except Refused:
+                if "portion" not in payload:
+                    skipped.append(i.get("name") or "?")
+                    continue
+                payload.pop("portion")
+                try:
+                    nt.send("POST", f"/diary/{d}/food", payload)
+                except Refused:
+                    skipped.append(i.get("name") or "?")
+                    continue
+            logged.append(i.get("name") or "?")
+        if not logged:
+            raise ValueError("None of those foods could be logged again (they weren't picked from the catalogue).")
+        return {"date": d, "meal": MEALS.get(meal if meal is not None else from_meal), "logged": logged,
+                "skipped": skipped}
 
     def add_food(self, body):
         """Put a food into NutriTrace's catalogue (values per the stated portion).

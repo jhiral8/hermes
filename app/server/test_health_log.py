@@ -60,6 +60,40 @@ class Log(unittest.TestCase):
         self.assertEqual((s["exercise"], s["set"]["reps"], s["set"]["weight"]), ("Bench press", 5, 82.5))
         self.assertEqual(log.search_foods("oat")["foods"][0]["name"], "Oats")
 
+    def test_recent_foods_saved_meals_quick_add_and_copy(self):
+        hl, log = setup(Recorder())
+        recent = log.recent_foods()["foods"]
+        self.assertTrue(recent)
+        self.assertEqual(len({f["id"] for f in recent}), len(recent))  # one row per food
+        oats = next(f for f in recent if f["name"] == "Oats")
+        self.assertEqual((oats["kcal"], oats["portion"], oats["unit"]), (190, 50, "g"))  # per serving, as NutriTrace keeps it
+        self.assertGreater(oats["times"], 1)
+
+        meals = log.saved_meals("")["meals"]
+        self.assertEqual(meals[0]["name"], "Usual breakfast")
+        self.assertEqual(meals[0]["kcal"], 380)
+        out = log.log_meal({"meal_id": 1, "meal": 0})
+        self.assertEqual((out["meal"], out["count"]), ("Breakfast", 2))
+
+        q = log.quick_add({"kcal": 450, "protein": 30, "meal": 3})
+        self.assertEqual(q["logged"]["meal"], "Snacks")
+        again = log.quick_add({"kcal": 450, "protein": 30, "meal": 3})  # same numbers reuse the same food
+        self.assertEqual(again["logged"]["name"], q["logged"]["name"])
+        self.assertIn("450 kcal", q["logged"]["name"])
+        with self.assertRaises(ValueError):
+            log.quick_add({"kcal": 0})
+
+        yesterday = (TODAY.toordinal() - 1)
+        import datetime
+        y = datetime.date.fromordinal(yesterday).isoformat()
+        c = log.copy_meal({"from_date": y, "from_meal": 1, "meal": 2})
+        self.assertEqual(c["meal"], "Dinner")
+        self.assertTrue(c["logged"])
+        dinner = [m for m in hl.food()["day"]["data"]["meals"] if m["meal"] == "Dinner"][0]
+        self.assertTrue(set(c["logged"]) <= {i["name"] for i in dinner["items"]})
+        with self.assertRaises(ValueError):
+            log.copy_meal({"from_date": "nope", "from_meal": 1})
+
     def test_checks_before_sending(self):
         rec = Recorder()
         _, log = setup(rec)

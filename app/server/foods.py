@@ -69,6 +69,7 @@ class Lookup:
         self.usda_key_file = cfg.get("usda_key_file")
         self._usda_key = usda_key
         self._usda_last = 0.0
+        self.retry_wait = float(cfg.get("retry_wait", 0.5))
         self.timeout = float(cfg.get("timeout", 6))
         self._open = opener or urllib.request.urlopen
         self._clock = clock
@@ -130,17 +131,23 @@ class Lookup:
                 raise SourceError("Searches are going a bit fast. Try again in a moment.")
             self._usda_last = now
         url = USDA_SEARCH_URL + "?" + urllib.parse.urlencode(
-            {"query": q, "dataType": USDA_TYPES, "pageSize": SEARCH_SIZE, "api_key": key})
+            {"query": us_spelling(q), "dataType": USDA_TYPES, "pageSize": SEARCH_SIZE, "api_key": key})
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-        try:  # errors never include the URL, which carries the key
-            with self._open(req, timeout=self.timeout) as r:
-                data = json.loads(r.read() or b"null")
-        except urllib.error.HTTPError as e:
-            raise SourceError(f"USDA FoodData Central answered {e.code}")
-        except (urllib.error.URLError, OSError):
-            raise SourceError("USDA FoodData Central is unreachable")
-        except ValueError:
-            raise SourceError("USDA FoodData Central sent something that isn't JSON")
+        for attempt in (1, 2):  # USDA's search fails now and then; one quick retry usually works
+            try:  # errors never include the URL, which carries the key
+                with self._open(req, timeout=self.timeout) as r:
+                    data = json.loads(r.read() or b"null")
+                break
+            except urllib.error.HTTPError as e:
+                if attempt == 2 or e.code in (400, 401, 403, 404, 429):
+                    raise SourceError(f"USDA FoodData Central answered {e.code}")
+            except (urllib.error.URLError, OSError):
+                if attempt == 2:
+                    raise SourceError("USDA FoodData Central is unreachable")
+            except ValueError:
+                if attempt == 2:
+                    raise SourceError("USDA FoodData Central sent something that isn't JSON")
+            time.sleep(self.retry_wait)
         items = []
         for f in (data or {}).get("foods") or []:
             if isinstance(f, dict):
@@ -211,6 +218,22 @@ def _product(p, code, now):
             "brand": (p.get("brands") or "").split(",")[0].strip(), "serving": p.get("serving_size") or None,
             "per100": _nutriments(n, "_100g"), "per_serving": _nutriments(n, "_serving"),
             "source": "Open Food Facts", "retrieved": datetime.date.fromtimestamp(now).isoformat()}
+
+
+# UK words USDA doesn't know, swapped only in what is sent to USDA.
+UK_US = {"yoghurt": "yogurt", "courgette": "zucchini", "aubergine": "eggplant", "coriander": "cilantro",
+         "mince": "ground", "prawn": "shrimp", "prawns": "shrimp", "rocket": "arugula", "porridge": "oatmeal",
+         "crisps": "chips", "chickpea": "chickpeas", "swede": "rutabaga", "beetroot": "beets",
+         "spring onion": "scallion", "spring onions": "scallions", "jacket potato": "baked potato",
+         "fibre": "fiber", "flavoured": "flavored", "wholemeal": "whole wheat", "single cream": "light cream",
+         "double cream": "heavy cream", "icing sugar": "powdered sugar", "biscuit": "cookie", "biscuits": "cookies"}
+
+
+def us_spelling(q):
+    out = q.lower()
+    for uk in sorted(UK_US, key=len, reverse=True):
+        out = re.sub(r"\b" + re.escape(uk) + r"\b", UK_US[uk], out)
+    return out
 
 
 def _usda_food(f, now):
