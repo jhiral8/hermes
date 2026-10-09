@@ -81,3 +81,44 @@ class PantryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from pantry import ingredients_of, recipe_check  # noqa: E402
+
+
+class RecipeCheckTests(unittest.TestCase):
+    def setUp(self):
+        self.p = Pantry(None, clock=today)
+        self.p.add_item({"name": "Chicken breast", "qty": 500, "unit": "g", "low": 100})
+        self.p.add_item({"name": "Rice", "qty": 50, "unit": "g", "low": 200})
+        self.p.add_item({"name": "Eggs", "unit": "each"})
+
+    def test_reads_plain_and_nested_rows(self):
+        rows = ingredients_of({"ingredients": ["2 onions", {"name": "Chicken breast", "amount": "300", "unit": "g"},
+                                               {"ingredient": {"name": "Rice"}, "quantity": 200}]})
+        self.assertEqual([r["name"] for r in rows], ["2 onions", "Chicken breast", "Rice"])
+        self.assertEqual(rows[1]["amount"], "300 g")
+
+    def test_unknown_shape_is_unreadable_not_an_error(self):
+        self.assertIsNone(ingredients_of({"name": "Dal", "steps": ["boil"]}))
+        self.assertIsNone(ingredients_of(None))
+        out = recipe_check(self.p.view(), {"steps": []})
+        self.assertFalse(out["readable"])
+        self.assertIn("couldn't read", out["message"].lower())
+
+    def test_pantry_coverage(self):
+        out = self.p.check({"ingredients": [
+            {"name": "chicken breasts", "amount": "300 g"},  # plural matches the singular pantry item
+            {"name": "Rice", "amount": "200 g"},             # in the pantry but running low
+            {"name": "Eggs"},                                # in the pantry, amount not set
+            {"name": "Coconut milk"}]})                      # not in the pantry
+        status = {r["name"]: r["status"] for r in out["ingredients"]}
+        self.assertEqual(status, {"chicken breasts": "have", "Rice": "low", "Eggs": "have", "Coconut milk": "missing"})
+        self.assertEqual(out["missing"], ["Coconut milk"])
+        self.assertEqual(out["low"], ["Rice"])
+        self.assertEqual(out["have"], 2)
+
+    def test_empty_pantry_marks_everything_missing(self):
+        empty = Pantry(None, clock=today)
+        out = empty.check({"ingredients": [{"name": "Lentils"}]})
+        self.assertEqual(out["missing"], ["Lentils"])

@@ -648,6 +648,18 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                         return
                 elif what == "pantry":
                     out = pantry.view()
+                elif what == "pantry-check":
+                    rid = (q.get("recipe") or [""])[0]
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid):
+                        raise ValueError("Pick a recipe first.")
+                    if health is None:
+                        self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
+                        return
+                    try:
+                        out = pantry.check(health.recipe_detail(rid))
+                    except SourceError as e:
+                        self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                        return
                 elif what in ("plan", "recipes"):
                     if mealplan is None:
                         self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})

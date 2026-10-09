@@ -9,6 +9,7 @@ what he bought, which puts it back in the pantry.
 import copy
 import datetime
 import json
+import re
 import secrets
 import threading
 from pathlib import Path
@@ -109,6 +110,10 @@ class Pantry:
         return secrets.token_hex(6)
 
     # ------------------------------------------------------------ reading
+
+    def check(self, detail):
+        """A recipe's ingredients against the pantry (see recipe_check)."""
+        return recipe_check(self.view(), detail)
 
     def view(self):
         with self._lock:
@@ -268,3 +273,80 @@ class Pantry:
             d["shop"] = [x for x in d["shop"] if not x["done"]]
             return {"cleared": before - len(d["shop"])}
         return self._change(go)
+
+
+# ---------------------------------------------------------------- recipe check
+
+_SKIP = {"a", "an", "the", "of", "and", "or", "to", "taste", "fresh", "dried", "large", "small", "medium",
+         "chopped", "sliced", "diced", "grated", "minced", "tin", "tinned", "can", "pack", "optional", "extra"}
+
+
+def _words(s):
+    """Plain words from a name, with a crude singular form, so 'eggs' matches 'egg'."""
+    out = set()
+    for w in re.findall(r"[a-z]+", (s or "").lower()):
+        if w in _SKIP or len(w) < 2:
+            continue
+        out.add(w[:-1] if len(w) > 3 and w.endswith("s") else w)
+    return out
+
+
+def ingredients_of(detail):
+    """Ingredient rows from a CookTrace recipe, read loosely: unknown fields are ignored.
+    Returns None when no ingredient list can be found at all."""
+    if not isinstance(detail, dict):
+        return None
+    rows = None
+    for key in ("ingredients", "ingredient_list", "lines"):
+        if isinstance(detail.get(key), list):
+            rows = detail[key]
+            break
+    if rows is None:
+        return None
+    out = []
+    for r in rows:
+        if isinstance(r, str):
+            name, amount = r, None
+        elif isinstance(r, dict):
+            ing = r.get("ingredient")
+            name = next((v for v in (r.get("name"), r.get("text"), ing.get("name") if isinstance(ing, dict) else ing)
+                         if isinstance(v, str) and v.strip()), "")
+            amount = next((str(r[k]) for k in ("amount", "quantity", "qty") if r.get(k) not in (None, "")), None)
+            unit = r.get("unit")
+            if amount and isinstance(unit, str) and unit:
+                amount = f"{amount} {unit}"
+        else:
+            continue
+        name = " ".join(str(name).split())[:80]
+        if name:
+            out.append({"name": name, "amount": str(amount)[:40] if amount else None})
+    return out or None
+
+
+def recipe_check(view, detail):
+    """How much of a recipe the pantry covers. Ingredients come from the recipe; the cost part comes later."""
+    rows = ingredients_of(detail)
+    if not rows:
+        return {"readable": False,
+                "message": "Couldn't read this recipe's ingredients, so the pantry check can't run yet."}
+    have = [(x, _words(x["name"])) for x in view["items"]]
+    checked = []
+    for ing in rows:
+        want = _words(ing["name"])
+        match = next((x for x, w in have if want and w and (want & w)), None)
+        if match is None:
+            status = "missing"
+        elif match["qty"] is None:
+            status = "have"  # in the pantry, amount not set
+        elif match["qty"] <= 0:
+            status = "missing"
+        elif match["low"]:
+            status = "low"
+        else:
+            status = "have"
+        checked.append({"name": ing["name"], "amount": ing["amount"], "status": status,
+                        "pantry_name": match["name"] if match else None})
+    return {"readable": True, "ingredients": checked,
+            "have": sum(1 for c in checked if c["status"] == "have"),
+            "low": [c["name"] for c in checked if c["status"] == "low"],
+            "missing": [c["name"] for c in checked if c["status"] == "missing"]}

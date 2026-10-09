@@ -208,6 +208,11 @@ class Health:
         except Exception:
             return datetime.date.today()
 
+    def recipe_detail(self, recipe_id):
+        """One CookTrace recipe, as CookTrace sends it (the pantry check reads its ingredients loosely)."""
+        ct = self._need(self.ct, "CookTrace")
+        return ct.get(f"/recipes/{recipe_id}", ttl=300) or {}
+
     def _need(self, app, name):
         if app is None:
             raise SourceError(f"{name} not connected yet")

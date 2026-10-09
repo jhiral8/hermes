@@ -2700,7 +2700,7 @@ async function screenMeals() {
     return Object.keys(groups).map((a) => `<div class="eyebrow" style="margin-top:12px">${esc(a)}</div><div class="list">${groups[a].map((x) =>
       `<div class="li${x.checked ? " muted" : ""}"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.quantity != null ? esc(x.quantity) + (x.unit ? " " + esc(x.unit) : "") : ""}</span></span><span class="end">${x.checked ? `<span class="badge ok">Bought</span>` : ""}</span></div>`).join("")}</div>`).join("") || `<p class="small muted">Shopping list is empty.</p>`;
   };
-  const recipes = (data) => `<div class="list">${data.items.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.servings ? esc(x.servings) + " servings" : ""}${x.kcal ? " · " + fmtN(x.kcal) + " kcal a serving" : ""}</span></span></div>`).join("")}</div>${data.total > data.items.length ? `<p class="xs muted">Showing ${data.items.length} of ${fmtN(data.total)}.</p>` : ""}`;
+  const recipes = (data) => `<div class="list">${data.items.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.servings ? esc(x.servings) + " servings" : ""}${x.kcal ? " · " + fmtN(x.kcal) + " kcal a serving" : ""}</span></span><span class="r"><button type="button" class="btn ghost sm" data-act="recipeCheck" data-arg="${esc(x.id)}">Check pantry</button></span></div>`).join("")}</div>${data.total > data.items.length ? `<p class="xs muted">Showing ${data.items.length} of ${fmtN(data.total)}.</p>` : ""}`;
 
   return head + `<div class="stack s24">
     <div class="cols even">
@@ -3146,4 +3146,21 @@ Object.assign(STRAT_ACTS, {
   shopTick: async (id) => { await api("/api/health/pantry/shop-tick", { body: { id } }); render(); },
   shopRemove: async (id) => { await api("/api/health/pantry/shop-remove", { body: { id } }); render(); },
   shopClear: async () => { await api("/api/health/pantry/shop-clear", { body: {} }); render(); },
+});
+
+/* Recipe check: a recipe's ingredients against the pantry. Cost comes with the prices step. */
+const CHECK_ST = { have: ["In the pantry", "ok"], low: ["Running low", "warn"], missing: ["Not in the pantry", "muted"] };
+Object.assign(STRAT_ACTS, {
+  recipeCheck: async (id) => {
+    modal("Pantry check", `<p class="small muted">Checking the pantry…</p>`, `<button type="button" class="btn ghost" data-act="close">Close</button>`);
+    try {
+      const d = await api(`/api/health/pantry-check?recipe=${encodeURIComponent(id)}`);
+      const body = !d.readable ? `<p class="small">${esc(d.message)}</p>` : `
+        <p class="small"><strong>${d.have} of ${d.ingredients.length}</strong> ingredients are in the pantry.${d.low.length ? ` Running low: ${d.low.map(esc).join(", ")}.` : ""}${d.missing.length ? ` To buy: ${d.missing.map(esc).join(", ")}.` : ""}</p>
+        <div class="list">${d.ingredients.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.amount ? esc(x.amount) : ""}</span></span><span class="badge">${CHECK_ST[x.status][0]}</span></div>`).join("")}</div>`;
+      modal("Pantry check", body, `<button type="button" class="btn ghost" data-act="close">Close</button>`);
+    } catch (e) {
+      modal("Pantry check", notConnected("CookTrace", e.message), `<button type="button" class="btn ghost" data-act="close">Close</button>`);
+    }
+  },
 });
