@@ -31,6 +31,9 @@ def load_estimator(module_dir):
     return mod
 
 
+HISTORY_DAYS = 90
+
+
 def run(days, module_dir, today=None):
     est = load_estimator(module_dir)
     if not days:
@@ -43,7 +46,26 @@ def run(days, module_dir, today=None):
            "expenditure": None if e.expenditure is None else round(e.expenditure),
            "trend_kg": None if e.trend_kg is None else round(e.trend_kg, 2),
            "weekly_change_kg": None if e.trend_kg_per_week is None else round(e.trend_kg_per_week, 2)}
+    out["history"] = history(est, days, today)
     return out
+
+
+def history(est, days, today, n=HISTORY_DAYS):
+    """The last n days for the Progress charts: scale weight and intake as fed in,
+    with the trend and expenditure the estimator saw on each of those days."""
+    by_date = {d["date"]: d for d in days}
+    rows = []
+    for k in range(n - 1, -1, -1):
+        d = today - datetime.timedelta(days=k)
+        r = by_date.get(d.isoformat())
+        if r is None:
+            continue
+        e = est.estimate_on(days, d)
+        rows.append({"date": d.isoformat(), "weight": r.get("weight"), "intake": r.get("intake"),
+                     "status": r.get("status"),
+                     "trend_kg": None if e.trend_kg is None else round(e.trend_kg, 2),
+                     "expenditure": None if e.held or e.expenditure is None else round(e.expenditure)})
+    return rows
 
 
 def write_atomic(path, obj):

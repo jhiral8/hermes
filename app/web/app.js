@@ -538,6 +538,7 @@ const CREDITS = [
   ["DOMPurify", "https://github.com/cure53/DOMPurify", "Second safety filter on text agents write (bundled)", "Apache-2.0 or MPL-2.0"],
   ["Fuse.js", "https://github.com/krisk/Fuse", "Typo-tolerant search (bundled)", "Apache-2.0"],
   ["SortableJS", "https://github.com/SortableJS/Sortable", "Drag and drop on the Work board (bundled)", "MIT"],
+  ["uPlot", "https://github.com/leeoniya/uPlot", "Weight and expenditure charts (bundled)", "MIT"],
   ["Open Food Facts", "https://world.openfoodfacts.org", "Product data for barcode lookup", "ODbL"],
 ];
 
@@ -938,6 +939,38 @@ async function chatSend() {
   S.chatLive = null;
   await render();
   chatScroll();
+}
+
+/* ---------- Progress charts (uPlot) ---------- */
+
+function drawProgressCharts() {
+  const h = S.progHistory;
+  if (!window.uPlot || !h || !h.length) return;
+  const css = getComputedStyle(document.documentElement);
+  const col = (v, f) => (css.getPropertyValue(v).trim() || f);
+  const fg3 = col("--fg-3", "#888"), line = col("--line", "#ddd"), accent = col("--accent", "#1a7f5a"), kcal = col("--m-c", "#d95926"), blue = col("--m-p", "#3987e5");
+  const xs = h.map((r) => Date.parse(r.date + "T12:00:00Z") / 1000);
+  const axes = (unit) => [
+    { stroke: fg3, grid: { stroke: line, width: 1 }, ticks: { stroke: line }, font: "11px Geist, sans-serif", values: (u, v) => v.map((t) => new Date(t * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: TZ })) },
+    { stroke: fg3, grid: { stroke: line, width: 1 }, ticks: { show: false }, font: "11px Geist, sans-serif", size: 52, values: (u, v) => v.map((x) => x == null ? "" : fmtN(x) + unit) },
+  ];
+  const make = (id, series, data, unit) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = "";
+    const opts = { width: el.clientWidth || 600, height: 220, legend: { show: true, live: true }, cursor: { y: false, points: { size: 6 } },
+      scales: { x: { time: true } }, axes: axes(unit), series: [{ value: (u, v) => v == null ? "" : new Date(v * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) }, ...series] };
+    const plot = new uPlot(opts, data, el);
+    new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height: 220 })).observe(el);
+  };
+  make("ch-weight", [
+    { label: "Weigh-in", stroke: blue, width: 0, points: { show: true, size: 5, fill: blue }, value: (u, v) => v == null ? "—" : v.toFixed(1) + " kg" },
+    { label: "Trend", stroke: accent, width: 2, spanGaps: true, points: { show: false }, value: (u, v) => v == null ? "—" : v.toFixed(2) + " kg" },
+  ], [xs, h.map((r) => r.weight), h.map((r) => r.trend_kg)], "");
+  make("ch-energy", [
+    { label: "Intake", stroke: kcal, fill: kcal, alpha: 0.45, width: 0, paths: uPlot.paths.bars({ size: [0.7, 8] }), points: { show: false }, value: (u, v) => v == null ? "—" : fmtN(v) + " kcal" },
+    { label: "Expenditure", stroke: accent, width: 2, spanGaps: true, points: { show: false }, value: (u, v) => v == null ? "—" : fmtN(v) + " kcal" },
+  ], [xs, h.map((r) => (r.status === "complete" ? r.intake : null)), h.map((r) => r.expenditure)], "");
 }
 
 /* ---------- Work board: drag a card to change its status ---------- */
@@ -1666,7 +1699,14 @@ async function screenProgress(n) {
     `<a class="li" href="#health/food/${r.date}"><span class="main"><span class="t">${esc(dayName(r.date))}</span><span class="s">${r.status === "logged" ? `${fmtN(r.kcal)} kcal · P ${fmtN(r.protein)} g` : r.status === "open" ? "Today, still open" : "No record"}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div>
     ${appLink(links.nutritrace, "See the full history in NutriTrace", "btn sm ghost")}</section>`;
 
-  return head + `<div class="stack s24">${seg}${tiles}${chart}<div class="cols even">${macros}${log}</div>
+  const hist = d.history && d.history.ok ? d.history.data : null;
+  S.progHistory = hist;
+  const trends = hist ? `<div class="cols even">
+    <section class="panel"><div class="panel-h"><div><h2>Weight</h2><p class="xs muted">Last ${hist.length} days · dots are weigh-ins, the line is the trend</p></div></div><div class="uchart" id="ch-weight"></div></section>
+    <section class="panel"><div class="panel-h"><div><h2>Expenditure and intake</h2><p class="xs muted">Line is the estimate the app had each day; bars are intake</p></div></div><div class="uchart" id="ch-energy"></div></section></div>`
+    : `<p class="small muted">Weight and expenditure charts: ${esc(d.history ? d.history.error : "not connected")}.</p>`;
+
+  return head + `<div class="stack s24">${seg}${tiles}${trends}${chart}<div class="cols even">${macros}${log}</div>
     ${hNotice(d.goals, "The goals")}</div>`;
 }
 
@@ -1840,6 +1880,7 @@ async function render() {
   $("#main").innerHTML = html;
   if (area === "health" && rest[0] === "scan") startScan();
   if (area === "work" && !rest.length && S.workView === "board") wireBoard();
+  if (area === "health" && rest[0] === "progress") drawProgressCharts();
   if (area === "max") {
     chatScroll();
     // An answer still running on the server (phone slept, page reloaded): check back.

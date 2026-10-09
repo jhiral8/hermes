@@ -148,7 +148,30 @@ def answer(host, path, q, today):
     raise ValueError("no sample answer for " + host + path)
 
 
+def sample_estimator():
+    """A sample estimate file (with 90 days of history) so Progress has charts in sample-data mode."""
+    import json
+    import math
+    import tempfile
+    from pathlib import Path
+
+    import estimate_feed
+    today = datetime.date.today()
+    days = []
+    for k in range(120, -1, -1):
+        d = today - datetime.timedelta(days=k)
+        wobble = 0.35 * math.sin(k * 1.7) + 0.2 * math.cos(k * 0.6)
+        days.append({"date": d.isoformat(), "intake": 2350 + 180 * math.sin(k * 0.9) if k % 9 else None,
+                     "status": "partial" if k == 0 else ("missing" if k % 9 == 0 else "complete"),
+                     "weight": round(84.6 - 0.032 * (120 - k) + wobble, 1) if k % 3 != 1 else None})
+    out = estimate_feed.run(days, Path(__file__).resolve().parent / "estimator", today=today)
+    path = Path(tempfile.mkdtemp(prefix="hermes-demo-est-"), "estimator.json")
+    path.write_text(json.dumps(out), encoding="utf-8")
+    return str(path)
+
+
 def sample_config():
-    return {"nutritrace": {"url": "http://nutritrace.sample", "key": "sample", "web_url": None},
+    return {"estimator_file": sample_estimator(),
+            "nutritrace": {"url": "http://nutritrace.sample", "key": "sample", "web_url": None},
             "lifttrace": {"url": "http://lifttrace.sample", "key": "sample", "web_url": None},
             "cooktrace": {"url": "http://cooktrace.sample", "key": "sample", "web_url": None}}

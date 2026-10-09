@@ -229,7 +229,20 @@ class Health:
 
         return {"nutrition": _section(build), "goals": _section(self.goals),
                 "estimate": _section(self.estimate), "links": self.links(), "today": self.today().isoformat(),
-                "weight": _section(self.weight)}
+                "weight": _section(self.weight), "history": _section(self.history)}
+
+    def history(self):
+        """Up to 90 days of weight, trend, intake and expenditure for the Progress charts."""
+        if not self.estimator_file:
+            raise SourceError("expenditure estimator isn't running yet")
+        try:
+            data = json.loads(Path(self.estimator_file).read_text(encoding="utf-8"))
+        except OSError:
+            raise SourceError("expenditure estimator hasn't written a result yet")
+        rows = data.get("history")
+        if not rows:
+            raise SourceError("history appears after the next nightly run")
+        return rows
 
     def weight(self):
         """Weight trend from the estimator's feed: the estimate's own trend, not the raw scale."""

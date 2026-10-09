@@ -22,8 +22,13 @@ class Run(unittest.TestCase):
     def test_estimate_has_only_summary_fields(self):
         out = ef.run(days(), MODULE)
         self.assertEqual(set(out) - {"as_of", "held", "reason", "intake_days", "weigh_ins", "expenditure",
-                                     "trend_kg", "weekly_change_kg"}, set())
+                                     "trend_kg", "weekly_change_kg", "history"}, set())
         self.assertIsNotNone(out["expenditure"])
+        h = out["history"]
+        self.assertLessEqual(len(h), ef.HISTORY_DAYS)
+        self.assertEqual(set(h[-1]), {"date", "weight", "intake", "status", "trend_kg", "expenditure"})
+        self.assertEqual(h[-1]["date"], out["as_of"])
+        self.assertIsNotNone(h[-1]["expenditure"])
         self.assertLess(out["weekly_change_kg"], 0)
 
     def test_too_little_data_is_held_not_guessed(self):
