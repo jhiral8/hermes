@@ -178,6 +178,42 @@ class App:
             **self.meta(),
         }
 
+    def connections(self):
+        """What the app is connected to and with what scope. Read from the config; no secrets."""
+        cfg = self.cfg
+
+        def has(path):
+            try:
+                return bool(path) and Path(path).is_file()
+            except OSError:
+                return False
+
+        def row(id_, name, scope, configured, key=None):
+            state = "demo" if self.demo else ("on" if configured and (key is None or has(key)) else
+                                               "key_missing" if configured else "off")
+            return {"id": id_, "name": name, "scope": scope, "state": state}
+
+        pc, br, mc, h = cfg.get("paperclip"), cfg.get("broker"), cfg.get("max_chat"), cfg.get("health") or {}
+        inbox, planner, foods, lib, cost = (cfg.get(k) for k in ("inbox", "planner", "foods", "library", "cost_file"))
+        out = [
+            row("paperclip", "Paperclip board", "Read work, agents and routines; create tasks, decide board approvals, pause agents, stop runs.", pc, (pc or {}).get("key_file")),
+            row("broker", "Approval broker", "Reads the request list only. Approving an email needs your fingerprint on the broker's own page.", br and br.get("feed_path"), (br or {}).get("feed_path")),
+            row("max", "Max (Hermes Agent)", "Chat as you, through Max's own API on this server. Same sandbox and approvals as Signal.", mc, (mc or {}).get("key_file")),
+            row("gmail", "Gmail", "Read-only (gmail.readonly). Shown to you only; never stored or sent to Max.", inbox, (inbox or {}).get("token_file")),
+            row("calendar", "Google Calendar", "Read-only (calendar.readonly). Shown to you only; never stored or sent to Max.", planner, (planner or {}).get("token_file")),
+        ]
+        for k, name in (("nutritrace", "NutriTrace"), ("lifttrace", "LiftTrace"), ("cooktrace", "CookTrace")):
+            c = h.get(k)
+            out.append(row(k, name, "Read-only token on this server. Health data never goes to Max or any model.", c, (c or {}).get("key_file")))
+        out += [
+            row("history", "MacroFactor history feed", "Nightly copy of your export for the Expenditure and weight tiles.", h.get("estimator_file"), h.get("estimator_file")),
+            row("foods", "Open Food Facts", "Barcode lookup, no account. Only the barcode number is sent.", foods and foods.get("off_enabled")),
+            row("library", "Max's memory and skills", "A copy made every 5 minutes for the Library. Read-only.", lib and lib.get("feed"), (lib or {}).get("feed")),
+            row("cost", "OpenRouter credit", "Max's spend and credit, recorded hourly on the server.", cost, (cost or {}).get("csv_path")),
+            row("stop", "Stop button", "Asks the server's kill switch to stop all agent work. Resuming stays on your Mac.", self.stop_file),
+        ]
+        return {"connections": out, **self.meta()}
+
     # ------------------------------------------------------------ one record
 
     def _detail(self, fn):

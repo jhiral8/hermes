@@ -59,7 +59,7 @@ const notConnected = (what, err) =>
 
 /* ---------- state and data ---------- */
 
-const S = { me: null, meta: {}, cache: {}, apprView: "pending", apprFilter: "all", workFilter: "all", workAgent: "all", workStatus: "all" };
+const S = { workView: (() => { try { return localStorage.getItem("hermes:workView") || "list"; } catch (_) { return "list"; } })(), me: null, meta: {}, cache: {}, apprView: "pending", apprFilter: "all", workFilter: "all", workAgent: "all", workStatus: "all" };
 
 async function api(path, opts = {}) {
   const init = { credentials: "same-origin", cache: "no-store", headers: {} };
@@ -299,7 +299,7 @@ async function screenWork(sub) {
   const statuses = [["backlog", "Backlog"], ["todo", "To do"], ["in_progress", "In progress"], ["blocked", "Blocked"], ["in_review", "In review"], ["done", "Done"], ["cancelled", "Cancelled"]];
   return `
   <div class="ph"><div class="ph-t"><div class="eyebrow">Paperclip board</div><h1>Work</h1><p class="sub">Agent work from Paperclip: projects, tasks and runs.</p></div>
-    <div class="ph-a">${S.meta.board_url ? `<a class="btn" href="${esc(S.meta.board_url)}" target="_blank" rel="noopener">Open board</a>` : ""}<button type="button" class="btn primary" data-act="createTask">${ic("plus")}Create task</button></div></div>
+    <div class="ph-a"><div class="seg" role="group" aria-label="View"><button type="button" aria-pressed="${S.workView !== "board"}" data-act="workView" data-arg="list">List</button><button type="button" aria-pressed="${S.workView === "board"}" data-act="workView" data-arg="board">Board</button></div>${S.meta.board_url ? `<a class="btn" href="${esc(S.meta.board_url)}" target="_blank" rel="noopener">Open board</a>` : ""}<button type="button" class="btn primary" data-act="createTask">${ic("plus")}Create task</button></div></div>
   ${w && !w.ok ? notConnected("The Paperclip board", w.error) : ""}
   <div class="stack s24">
     <div class="row-flex">
@@ -307,7 +307,8 @@ async function screenWork(sub) {
       <label class="sr" for="wf-agent">Agent</label><select class="inp" id="wf-agent" style="width:auto" data-change="workAgent"><option value="all">Any agent</option>${agents.map((a) => `<option value="${esc(a.id)}"${S.workAgent === a.id ? " selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
       <label class="sr" for="wf-st">Status</label><select class="inp" id="wf-st" style="width:auto" data-change="workStatus"><option value="all">Any status</option>${statuses.map(([v, t]) => `<option value="${v}"${S.workStatus === v ? " selected" : ""}>${t}</option>`).join("")}</select>
     </div>
-    ${[...groups].map(([name, items]) => `<section class="panel"><div class="panel-h"><div><h2>${esc(name)}</h2></div></div><div class="list">${items.map(issueRow).join("")}</div></section>`).join("")}
+    ${S.workView === "board" ? `<div class="board">${[["To do", ["backlog", "todo"]], ["In progress", ["in_progress"]], ["Blocked", ["blocked"]], ["In review", ["in_review"]], ["Done", ["done"]]].map(([t, sts]) => { const col = issues.filter((i) => sts.includes(i.status)); return `<div class="col"><h3>${t} · ${col.length}</h3>${col.map((i) => `<a class="tcard" href="#work/${esc(i.id)}"><span class="mono xs muted">${esc(i.ref || "")}</span>${i.running ? ' <span class="pulse" aria-hidden="true"></span>' : ""}<br><b style="font-weight:600">${esc(i.title)}</b><br><span class="xs muted">${esc(i.agent || "Unassigned")}${i.project ? " · " + esc(i.project) : ""}</span></a>`).join("") || '<span class="xs muted">None</span>'}</div>`; }).join("")}</div>`
+      : [...groups].map(([name, items]) => `<section class="panel"><div class="panel-h"><div><h2>${esc(name)}</h2></div></div><div class="list">${items.map(issueRow).join("")}</div></section>`).join("")}
     ${w && w.ok && !issues.length ? `<div class="empty"><h3>No tasks here</h3><p class="small">Change the filters, or create a task.</p></div>` : ""}
   </div>`;
 }
@@ -524,7 +525,17 @@ function approvalDetail(a) {
     </dl></section></div>`;
 }
 
-const SYS_TABS = [["status", "Status"], ["spending", "Spending"], ["controls", "Controls"]];
+const SYS_TABS = [["status", "Status"], ["connections", "Connections"], ["access", "Access"], ["spending", "Spending"], ["controls", "Controls"], ["credits", "Credits"]];
+const CONN_STATE = { on: ["ok", "Connected"], demo: ["ok", "Sample data"], key_missing: ["warn", "Set up · file missing"], off: ["", "Not connected"] };
+const CREDITS = [
+  ["Hermes Agent", "https://github.com/NousResearch/hermes-agent", "Max, on Signal and in this app", ""],
+  ["Paperclip", "https://github.com/paperclipai/paperclip", "The board: agents, tasks, routines, approvals", "MIT"],
+  ["salt.md", "https://github.com/saltmd/salt.md", "Notes workspace shared with agents (separate service)", "AGPL-3.0"],
+  ["changedetection.io", "https://github.com/dgtlmoon/changedetection.io", "Release watcher", "Apache-2.0"],
+  ["ZXing for the browser", "https://github.com/zxing-js/browser", "Barcode reading in the camera view (bundled)", "MIT"],
+  ["Geist and Geist Mono", "https://github.com/vercel/geist-font", "Typefaces (bundled)", "SIL OFL 1.1"],
+  ["Open Food Facts", "https://world.openfoodfacts.org", "Product data for barcode lookup", "ODbL"],
+];
 
 async function screenSystem(tab) {
   if (!SYS_TABS.some(([k]) => k === tab)) tab = "status";
@@ -545,6 +556,20 @@ async function screenSystem(tab) {
         <dt>Checked</dt><dd>${st ? esc(when(new Date(st.checked_at * 1000).toISOString())) : "unknown"}</dd></dl>
         <p class="xs muted" style="margin-top:10px">A backup is only shown as on time when its newest record is less than a day old. Unknown means the app can't see it yet, not that it failed.</p>
         <div class="btns" style="margin-top:10px"><button type="button" class="btn sm" data-act="recheck">Check again</button></div></section></div>`;
+  } else if (tab === "connections") {
+    const d = await load("connections", "/api/connections");
+    const list = (d && d.connections) || [];
+    body = list.length ? `<section class="panel"><div class="list">${list.map((c) => `<div class="li"><span class="main"><span class="t">${esc(c.name)}</span><span class="s">${esc(c.scope)}</span></span><span class="end">${badge(...(CONN_STATE[c.state] || ["", c.state]))}</span></div>`).join("")}</div></section>
+      <p class="small muted" style="margin-top:12px">Connections are set up on the server, not from here, and keys never pass through the app. "File missing" means the setting is there but its key or feed file isn't.</p>`
+      : `<div class="empty"><h3>Can't reach the server</h3></div>`;
+  } else if (tab === "access") {
+    const row = (ok, t) => `<div class="row-flex small${ok ? "" : " muted"}">${ic(ok ? "check" : "lock", 16)}<span>${esc(t)}</span></div>`;
+    body = `<div class="cols even"><section class="panel"><h2 style="margin-bottom:10px">Your access</h2><div class="allow">${["Health records (read-only here)", "Gmail and Google Calendar (read-only)", "Max's files, memory and skills (read-only)", "Board: create tasks, decide, pause, stop runs", "Block all agent work"].map((t) => row(1, t)).join("")}${row(0, "Approving emails: only on the broker's page, with your fingerprint")}</div>
+        <p class="xs muted" style="margin-top:10px">Only your Tailscale login can open this app.</p></section>
+      <section class="panel"><h2 style="margin-bottom:10px">Agent access</h2>${["max", "codex", "claude"].map((k) => `<h3 class="small" style="margin:10px 0 6px;font-weight:600">${k[0].toUpperCase() + k.slice(1)}</h3><div class="allow">${AGENT_ACCESS[k].map(([ok, t]) => row(ok, t)).join("")}</div>`).join("")}
+        <p class="xs muted" style="margin-top:12px">Set on the server. An agent can't grant itself or others access, and a remembered preference isn't a permission. Giving an agent your private data needs your own yes first.</p></section></div>`;
+  } else if (tab === "credits") {
+    body = `<section class="panel"><h2 style="margin-bottom:10px">Software and data</h2><div class="tbl-wrap"><table class="tbl tbl-cards"><thead><tr><th>Component</th><th>Used for</th><th>Licence</th></tr></thead><tbody>${CREDITS.map(([n, u, w, l]) => `<tr><td data-l="Component"><a class="link" href="${esc(u)}" target="_blank" rel="noopener">${esc(n)}</a></td><td data-l="Used for">${esc(w)}</td><td data-l="Licence">${esc(l || "See project")}</td></tr>`).join("")}</tbody></table></div></section>`;
   } else if (tab === "spending") {
     const d = await load("spending", "/api/spending");
     const b = d && d.board, ag = d && d.agents, mx = d && d.max;
@@ -574,7 +599,7 @@ async function screenSystem(tab) {
         <section class="panel"><h2 style="margin-bottom:6px">Active runs</h2><div class="list">${runs.map((i) => `<div class="li"><span class="main"><span class="t mono">${esc(i.run_id.slice(0, 12))}</span><span class="s">${esc(i.agent || "")} · ${esc(i.ref || i.title)}</span></span><button type="button" class="btn sm" data-act="cancelRun" data-arg="${esc(i.run_id)}">Stop run</button></div>`).join("") || `<p class="small muted">No runs active.</p>`}</div></section>
       </div></div>`;
   }
-  return `<div class="ph"><div class="ph-t"><h1>System</h1><p class="sub">Service state, spending and controls.</p></div></div>
+  return `<div class="ph"><div class="ph-t"><h1>System</h1><p class="sub">Service state, connections, access, spending and controls.</p></div></div>
     <nav class="tabs" aria-label="Sections">${SYS_TABS.map(([k, t]) => `<a href="#system/${k}"${k === tab ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>${body}`;
 }
 
@@ -1031,6 +1056,7 @@ async function act(name, arg, el) {
     }
     if (name === "planEvent") return openPlanEvent(arg);
     if (name === "palette") return openPalette();
+    if (name === "workView") { S.workView = arg; try { localStorage.setItem("hermes:workView", arg); } catch (_) { /* private mode */ } return render(); }
     if (name === "acctMenu") return openAcctMenu();
     if (name === "theme") { setTheme(arg); return openAcctMenu(); }
     if (name === "go") { closeModal(); location.hash = arg; return; }

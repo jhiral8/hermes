@@ -333,6 +333,7 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         "/api/routines": app.routines,
         "/api/spending": app.spending,
         "/api/status": cache.get,
+        "/api/connections": app.connections,
     }
 
     class Handler(BaseHTTPRequestHandler):
