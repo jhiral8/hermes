@@ -169,6 +169,37 @@ class Searching(unittest.TestCase):
             bad.search("oats")
 
 
+class Usda(unittest.TestCase):
+    def test_usda_search_reads_key_file_and_parses_energy_variants(self):
+        now, clk = clock()
+        calls = []
+        def opener(req, timeout=None):
+            calls.append(req.full_url)
+            return sample_opener(req, timeout)
+        lk = Lookup({"usda_key_file": key("k123")}, opener=opener, clock=clk)
+        out = lk.usda_search("chicken rice yogurt")
+        by = {x["name"]: x for x in out["items"]}
+        self.assertEqual(by["Chicken, breast, meat only, cooked, roasted"]["per100"]["kcal"], 165)  # id 2047
+        self.assertEqual(by["Rice, white, cooked"]["per100"]["kcal"], 130.0)  # from kJ; capitals tidied
+        self.assertIsNone(by["Rice, white, cooked"]["per100"]["fat"])
+        self.assertEqual(by["Yogurt, Greek, plain, nonfat"]["source"], "USDA FoodData Central")
+        self.assertIn("api_key=k123", calls[0])
+        self.assertIn("dataType=Foundation", calls[0])
+
+    def test_usda_needs_a_key_and_hides_it_in_errors(self):
+        with self.assertRaises(SourceError):
+            Lookup({}, opener=sample_opener).usda_search("rice")
+        with self.assertRaises(SourceError) as e:
+            Lookup({"usda_key_file": key("secretkey")}, opener=Fake(fail=403)).usda_search("rice")
+        self.assertNotIn("secretkey", str(e.exception))
+        with self.assertRaises(SourceError):
+            Lookup({"usda_key_file": "/nonexistent/usda.key"}, opener=sample_opener).usda_search("rice")
+
+    def test_unknown_library_refused(self):
+        with self.assertRaises(ValueError):
+            Foods(Lookup({})).search("rice", "other")
+
+
 class Saving(unittest.TestCase):
     def store(self):
         return SavedFoods(Path(tempfile.mkdtemp(), "saved-foods.json"))
@@ -269,6 +300,11 @@ class Http(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["items"][0]["name"], "Sample Greek yoghurt 0%")
         self.assertEqual(self.call(base, "/api/health/food-search?q=a")[0], 400)
+        base2 = self.serve(Foods(Lookup({"off_enabled": True}, opener=sample_opener, usda_key="x")))
+        status, body = self.call(base2, "/api/health/food-search?q=chicken&source=usda")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["items"][0]["fdc_id"], 2)
+        self.assertEqual(self.call(base2, "/api/health/food-search?q=chicken&source=zz")[0], 400)
 
     def test_lookup_off_says_so_and_is_503(self):
         base = self.serve(Foods(Lookup({}, opener=sample_opener)))

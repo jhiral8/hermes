@@ -297,7 +297,7 @@ def make_library(cfg, app):
 def make_foods(cfg, app):
     """Barcode lookup and saved foods for the Food screen (sample data in sample-data mode)."""
     if app.demo:
-        return Foods(Lookup({"off_enabled": True}, opener=food_lookup.sample_opener))
+        return Foods(Lookup({"off_enabled": True}, opener=food_lookup.sample_opener, usda_key="sample"))
     fc = cfg.get("foods")
     if not fc:
         return None
@@ -746,8 +746,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 if what == "foods":
                     out = self._foods_do(foods.saved if foods else None)
                 elif what == "food-search":
-                    q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "").get("q", [""])[0]
-                    out = self._foods_do(lambda: foods.search(q))
+                    qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                    out = self._foods_do(lambda: foods.search(qs.get("q", [""])[0], qs.get("source", ["off"])[0]))
                 else:
                     out = self._foods_do(lambda: foods.product(what[len("barcode/"):]))
             except ActionError as e:

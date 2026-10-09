@@ -137,7 +137,8 @@
   "foods": {
     "off_enabled": false,
     "timeout": 6,
-    "store_path": "/var/lib/hermes-app/saved-foods.json"
+    "store_path": "/var/lib/hermes-app/saved-foods.json",
+    "usda_key_file": "/etc/hermes-app/usda.key"
   },
   "library": {
     "feed": "/var/lib/hermes-app-library/library.json",

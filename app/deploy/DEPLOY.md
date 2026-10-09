@@ -338,6 +338,15 @@ Nothing here goes to Max or any model.
    with calories are shown. Picking one adds it to NutriTrace the same way a
    scanned barcode does. Test: `GET /api/health/food-search?q=greek%20yoghurt`
    returns `items`; a one-letter query is refused with 400.
+5. USDA FoodData Central search (same Log food button, `source=usda`) reuses the
+   USDA key that NutriTrace and CookTrace already use; Craig adds no new key.
+   Install: copy that existing key into `/etc/hermes-app/usda.key` (owner root,
+   group hermes-app, mode 0640) and set `foods.usda_key_file` to that path in the
+   config. The server calls `api.nal.usda.gov` (generic foods only: Foundation,
+   SR Legacy, Survey), one call a second, cached for a day. The key never appears
+   in errors or logs. Without the file, USDA search says it isn't set up and Open
+   Food Facts search still works. Test:
+   `GET /api/health/food-search?q=chicken&source=usda` returns `items`.
 
 ## Library: Max's memory and skills (read-only)
 
