@@ -1126,18 +1126,25 @@ async function act(name, arg, el) {
     if (name === "logTab") return await logTab(arg);
     if (name === "describeGo") {
       const text = ($("#ds-text").value || "").trim();
-      if (text.length < 3) return toast("Say what you ate first.");
+      const label = S.photoKind === "label";
+      if (label && !S.photo) return toast("Add a photo of the label.");
+      if (!S.photo && text.length < 3) return toast("Add a photo or say what you ate.");
       busy(true);
-      $("#est-out").innerHTML = `<p class="small muted">Max is estimating…</p>`;
-      try { drawEstimate(await api("/api/health/log/describe", { body: { text } })); }
-      catch (e) { $("#est-out").innerHTML = ""; throw e; }
+      $("#est-out").innerHTML = `<p class="small muted">Max is ${S.photo ? "looking at the photo" : "estimating"}…</p>`;
+      try {
+        const d = S.photo
+          ? await api("/api/health/log/photo", { body: { kind: S.photoKind, image: S.photo, hint: label ? "" : text } })
+          : await api("/api/health/log/describe", { body: { text } });
+        if (d.label) drawLabel(d); else drawEstimate(d);
+      } catch (e) { $("#est-out").innerHTML = ""; throw e; }
       finally { busy(false); }
       return;
     }
+    if (name === "photoClear") { S.photo = null; showThumb(); return; }
     if (name === "photoKind") {
       S.photoKind = arg;
       document.querySelectorAll('[data-act="photoKind"]').forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.arg === arg)));
-      if ($("#ph-hint-f")) $("#ph-hint-f").hidden = arg === "label";
+      if ($("#ds-f")) $("#ds-f").hidden = arg === "label";
       return;
     }
     if (name === "estLog") {
@@ -1765,7 +1772,7 @@ async function screenLog(day, meal) {
     </div>`;
 }
 
-const LOG_TABS = [["search", "Search"], ["recent", "Recent"], ["meals", "Saved meals"], ["describe", "Describe"], ["photo", "Photo"], ["quick", "Quick add"]];
+const LOG_TABS = [["search", "Search"], ["recent", "Recent"], ["meals", "Saved meals"], ["describe", "Describe or photo"], ["quick", "Quick add"]];
 const mealOptions = (sel) => MEAL_NAMES.map((m, i) => `<option value="${i}"${i === sel ? " selected" : ""}>${m}</option>`).join("");
 
 async function logTab(tab) {
@@ -1790,16 +1797,14 @@ async function logTab(tab) {
     return;
   }
   if (tab === "describe") {
-    pane.innerHTML = `<div class="field"><label for="ds-text">Describe what you ate</label><textarea id="ds-text" class="inp" rows="3" maxlength="500" placeholder="2 eggs, a slice of toast with butter, a banana and a coffee with milk" autofocus></textarea><span class="hint">Write it the way you'd say it. Amounts like “2”, “150 g” or “a bowl” help. Max estimates it; nothing is logged until you choose.</span></div>
-      <div class="btns" style="margin-top:12px"><button type="button" class="btn primary" data-act="describeGo">${ic("max", 16)}Estimate</button></div><div id="est-out" style="margin-top:16px"></div>`;
-    return;
-  }
-  if (tab === "photo") {
+    S.photoKind = "meal"; S.photo = null;
     pane.innerHTML = `<div class="chips" style="margin-bottom:12px"><button type="button" class="chip" aria-pressed="true" data-act="photoKind" data-arg="meal">A meal</button><button type="button" class="chip" aria-pressed="false" data-act="photoKind" data-arg="label">A nutrition label</button></div>
-      <label class="btn primary" for="ph-file" style="cursor:pointer">${ic("camera", 16)}Take or choose a photo</label><input id="ph-file" type="file" accept="image/*" capture="environment" hidden>
-      <div class="field" style="margin-top:12px" id="ph-hint-f"><label for="ph-hint">Anything Max should know (optional)</label><input id="ph-hint" class="inp" maxlength="200" placeholder="e.g. large plate, cooked in oil"></div>
-      <p class="xs muted" style="margin-top:8px">The photo goes to Max to estimate. It isn't kept by the app. Nothing is logged until you choose.</p><div id="est-out" style="margin-top:16px"></div>`;
-    S.photoKind = "meal";
+      <div class="field" id="ds-f"><label for="ds-text">Describe what you ate</label><textarea id="ds-text" class="inp" rows="3" maxlength="500" placeholder="2 eggs, a slice of toast with butter, a banana and a coffee with milk"></textarea><span class="hint">Add a photo, describe it, or both. Amounts like “2”, “150 g” or “a bowl” help.</span></div>
+      <div class="row-flex" style="gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px"><label class="btn" for="ph-file" style="cursor:pointer">${ic("camera", 16)}<span id="ph-lab">Add a photo</span></label><input id="ph-file" type="file" accept="image/*" capture="environment" hidden>
+        <img id="ph-thumb" alt="" hidden style="width:48px;height:48px;object-fit:cover;border-radius:8px"><button type="button" class="btn ghost sm" data-act="photoClear" id="ph-clear" hidden>Remove photo</button>
+        <button type="button" class="btn primary" data-act="describeGo" style="margin-left:auto">${ic("max", 16)}Estimate</button></div>
+      <p class="xs muted" style="margin-top:8px">Max estimates it. Photos aren't kept by the app, and nothing is logged until you choose.</p><div id="est-out" style="margin-top:16px"></div>`;
+    $("#ds-text").focus();
     return;
   }
   pane.innerHTML = `<p class="small muted">Loading…</p>`;
@@ -1870,25 +1875,27 @@ function shrinkPhoto(file) {
     rd.readAsDataURL(file);
   });
 }
+function showThumb() {
+  const t = $("#ph-thumb"), on = !!S.photo;
+  if (t) { t.hidden = !on; if (on) t.src = S.photo; }
+  if ($("#ph-clear")) $("#ph-clear").hidden = !on;
+  if ($("#ph-lab")) $("#ph-lab").textContent = on ? "Change photo" : "Add a photo";
+}
 async function photoChosen(file) {
-  const box = $("#est-out");
-  if (!file || !box) return;
-  box.innerHTML = `<p class="small muted">Max is looking at the photo…</p>`;
-  try {
-    const image = await shrinkPhoto(file);
-    const d = await api("/api/health/log/photo", { body: { kind: S.photoKind, image, hint: ($("#ph-hint") || {}).value || "" } });
-    if (d.label) {
-      const L = d.label;
-      S.label = L;
-      const b = L.per100.kcal != null ? L.per100 : L.per_serving;
-      box.innerHTML = `<section class="panel" style="padding:14px"><b>${esc(L.name || "Food from the label")}</b>${L.brand ? ` <span class="muted">· ${esc(L.brand)}</span>` : ""}
-        <p class="small" style="margin-top:6px">${b === L.per100 ? "Per 100 g" : `Per ${esc(L.serving || "serving")}`}: ${fmtN(b.kcal)} kcal · P ${fmtN(b.protein)} · C ${fmtN(b.carbs)} · F ${fmtN(b.fat)} · Fibre ${fmtN(b.fibre)}</p>
-        ${L.unsure.length ? `<p class="xs muted">Max wasn't sure about: ${L.unsure.join(", ")}. Check them on the packet.</p>` : ""}
-        ${d.sample ? `<p class="xs muted">Sample data: on the server Max reads the label.</p>` : ""}
-        <div class="field" style="margin-top:10px"><label for="lb-name">Name</label><input id="lb-name" class="inp" maxlength="120" value="${esc(L.name)}" placeholder="No name on the label: type one"></div>
-        <div class="btns" style="margin-top:10px"><button type="button" class="btn primary" data-act="labelLog">Add and log</button></div></section>`;
-    } else drawEstimate(d);
-  } catch (e) { box.innerHTML = `<p class="small" style="color:var(--danger,#b42318)">${esc(e.message)}</p>`; }
+  if (!file) return;
+  try { S.photo = await shrinkPhoto(file); showThumb(); }
+  catch (e) { S.photo = null; showThumb(); toast(e.message); }
+}
+function drawLabel(d) {
+  const box = $("#est-out"), L = d.label;
+  S.label = L;
+  const b = L.per100.kcal != null ? L.per100 : L.per_serving;
+  box.innerHTML = `<section class="panel" style="padding:14px"><b>${esc(L.name || "Food from the label")}</b>${L.brand ? ` <span class="muted">· ${esc(L.brand)}</span>` : ""}
+    <p class="small" style="margin-top:6px">${b === L.per100 ? "Per 100 g" : `Per ${esc(L.serving || "serving")}`}: ${fmtN(b.kcal)} kcal · P ${fmtN(b.protein)} · C ${fmtN(b.carbs)} · F ${fmtN(b.fat)} · Fibre ${fmtN(b.fibre)}</p>
+    ${L.unsure.length ? `<p class="xs muted">Max wasn't sure about: ${L.unsure.join(", ")}. Check them on the packet.</p>` : ""}
+    ${d.sample ? `<p class="xs muted">Sample data: on the server Max reads the label.</p>` : ""}
+    <div class="field" style="margin-top:10px"><label for="lb-name">Name</label><input id="lb-name" class="inp" maxlength="120" value="${esc(L.name)}" placeholder="No name on the label: type one"></div>
+    <div class="btns" style="margin-top:10px"><button type="button" class="btn primary" data-act="labelLog">Add and log</button></div></section>`;
 }
 
 // Open Food Facts and USDA results, picked to add to NutriTrace and log in one go.

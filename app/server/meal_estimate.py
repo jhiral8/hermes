@@ -182,9 +182,9 @@ def photo(body, chat):
         if not label:
             raise SourceError("Max couldn't read that label. Try again closer and in good light, or type it in.")
         return {"label": label}
-    hint = " ".join(str(body.get("hint") or "").split())[:200]
+    hint = " ".join(str(body.get("hint") or "").split())[:MAX_TEXT]
     got = _ask(chat, "Estimate the nutrition of the meal in this photo for my food diary (Hermes app, Log food). "
-               + ITEM_RULES + (f"\n\nWhat I said about it: {hint}" if hint else ""), image=image)
+               + ITEM_RULES + (f"\n\nWhat I said about it (trust this over the photo for amounts and hidden items): {hint}" if hint else ""), image=image)
     items = clean_items(got)
     if not items:
         raise SourceError("Max couldn't make out the food in that photo. Try again, or describe it instead.")
