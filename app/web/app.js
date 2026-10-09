@@ -3041,14 +3041,14 @@ async function screenPantry() {
   const unitSel = (id, cur = "each") => `<select class="inp" id="${id}" style="width:auto" aria-label="Unit">${opts(d.units, cur)}</select>`;
   const placeSel = (id, cur = "cupboard") => `<select class="inp" id="${id}" style="width:auto" aria-label="Where it's kept">${opts(d.places, cur)}</select>`;
 
-  const items = d.items.length ? d.items.map((x) => `<div class="li${x.low ? " warn" : ""}"><span class="main"><span class="t">${esc(x.name)}</span>
+  const items = d.items.length ? d.items.map((x) => `<div class="li pl${x.low ? " warn" : ""}"><span class="main"><span class="t">${esc(x.name)}</span>
       <span class="s">${x.qty == null ? "Amount not set" : esc(x.qty) + " " + esc(x.unit)} · ${esc(x.place)}${x.low ? " · Running low" : ""}</span></span>
       <span class="r"><input class="inp num" inputmode="decimal" id="pu-${x.id}" aria-label="Amount used of ${esc(x.name)}" style="width:80px" placeholder="Amount">
       <button type="button" class="btn ghost sm" data-act="pantryUse" data-arg="${x.id}">Used</button>
       <button type="button" class="btn ghost sm" data-act="pantryRemove" data-arg="${x.id}">Remove</button></span></div>`).join("")
     : `<p class="muted">Nothing in the pantry yet. Add what you have below.</p>`;
 
-  const batches = d.batches.length ? d.batches.map((b) => `<div class="li${b.left <= 0 ? " muted" : ""}${b.days_left != null && b.days_left <= 1 && b.left > 0 ? " warn" : ""}"><span class="main"><span class="t">${esc(b.name)}</span>
+  const batches = d.batches.length ? d.batches.map((b) => `<div class="li pl${b.left <= 0 ? " muted" : ""}${b.days_left != null && b.days_left <= 1 && b.left > 0 ? " warn" : ""}"><span class="main"><span class="t">${esc(b.name)}</span>
       <span class="s">${esc(b.left)} of ${esc(b.portions)} portion${b.portions === 1 ? "" : "s"} left · ${esc(b.place)}${b.use_by ? ` · use by ${esc(dayName(b.use_by))}` : ""}</span></span>
       <span class="r"><input class="inp num" inputmode="decimal" id="pb-${b.id}" aria-label="Portions eaten of ${esc(b.name)}" style="width:80px" value="1">
       <button type="button" class="btn ghost sm" data-act="batchUse" data-arg="${b.id}" ${b.left <= 0 ? "disabled" : ""}>Eat</button>
@@ -3058,7 +3058,7 @@ async function screenPantry() {
   const suggest = d.suggest.length ? `<div class="panel-sub"><p class="small"><strong>Running low:</strong> ${d.suggest.map((s) => esc(s.name)).join(", ")}</p>
       <div class="btns">${d.suggest.map((s) => `<button type="button" class="btn ghost sm" data-act="shopFromLow" data-arg="${s.id}">Add ${esc(s.name)}</button>`).join("")}</div></div>` : "";
 
-  const shop = d.shop.length ? d.shop.map((s) => `<div class="li${s.done ? " muted" : ""}"><span class="main"><span class="t${s.done ? " done" : ""}">${esc(s.name)}</span>
+  const shop = d.shop.length ? d.shop.map((s) => `<div class="li pl${s.done ? " muted" : ""}"><span class="main"><span class="t${s.done ? " done" : ""}">${esc(s.name)}</span>
       <span class="s">${s.qty == null ? "" : esc(s.qty) + " " + esc(s.unit)}${s.done ? " · bought" : ""}</span></span>
       <span class="r">${s.done ? `<span class="badge">Bought</span>` : `<button type="button" class="btn primary sm" data-act="shopTick" data-arg="${s.id}">Bought</button>`}
       <button type="button" class="btn ghost sm" data-act="shopRemove" data-arg="${s.id}">Remove</button></span></div>`).join("")

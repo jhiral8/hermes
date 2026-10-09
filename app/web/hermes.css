@@ -1113,3 +1113,11 @@ main:has(.mc-app){padding:0;max-width:none}
 .capgrid .cap-chat{background:var(--accent-soft);border-color:color-mix(in oklab,var(--accent) 30%,var(--line))}
 @media (max-width:899px){ .chat-btn .lbl,.chat-btn .kbd{display:none} }
 @media (max-width:599px){ .top .chat-btn{display:none} .ask-bar .kbd{display:none} }
+
+/* Pantry rows: on a phone the amount box and buttons drop under the name instead of squeezing it. */
+.li.pl .r{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center}
+@media (max-width:600px){
+  .li.pl{flex-wrap:wrap}
+  .li.pl .r{width:100%;justify-content:flex-start}
+  .li.pl .inp.num{width:110px !important}
+}
