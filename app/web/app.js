@@ -227,8 +227,9 @@ async function screenToday() {
   const food = `<section class="panel a-food" aria-labelledby="h-food">
     <div class="panel-h"><h2 id="h-food">Food today</h2><div class="r"><a class="btn ghost sm" href="#health/food">Open Food ${ic("chev", 16)}</a></div></div>
     ${!f ? notConnected("Health", "Couldn't reach the server.") : !t ? notConnected("NutriTrace", f.day && f.day.error) : `<div class="food-hero">${ring(t.kcal, goals.kcal)}
-      <div class="stack s8" style="gap:14px;width:100%"><p class="small muted">${left != null ? `${fmtN(left)} kcal left · fixed target` : "No calorie target set"}</p>
+      <div class="stack s8" style="gap:14px;width:100%"><p class="small muted">${left != null ? `${fmtN(left)} kcal left · ${f.goals.source === "strategy" ? "your strategy" : "NutriTrace goal"}` : `No calorie target set · <a class="link" href="#health/strategy">Set up strategy</a>`}</p>
         <div class="macros">${[["protein", "Protein"], ["carbs", "Carbs"], ["fat", "Fat"], ["fibre", "Fibre"]].map(([k, l]) => `<div class="macro"><div class="l"><span>${l}</span><span>${fmtN(t[k])}<span class="muted" style="font-weight:400"> / ${fmtN(goals[k])} g</span></span></div>${hBar(t[k], goals[k])}</div>`).join("")}</div></div></div>`}
+    ${f && f.checkin_due ? `<div class="notice info" role="status" style="margin-top:14px">${ic("info")}<div><b>Weekly check-in is ready.</b><div class="btns"><button type="button" class="btn sm primary" data-act="ciOpen">Start check-in</button></div></div></div>` : ""}
     <div class="btns" style="margin-top:16px"><a class="btn primary" href="#health/log">${ic("plus", 16)}Log food</a><a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a><a class="btn" href="#health/train">${ic("dumbbell", 16)}Training</a></div>
   </section>`;
 
@@ -1112,6 +1113,7 @@ async function act(name, arg, el) {
   const busy = (on) => { if (el) el.disabled = on; };
   try {
     if (name === "close") return closeModal();
+    if (STRAT_ACTS[name]) return await STRAT_ACTS[name](arg, el, busy);
     if (name === "scanLookup") {
       const code = ($("#scan-code").value || "").replace(/\s+/g, "");
       if (!/^\d{8,14}$/.test(code)) return toast("Type the number under the barcode (8 to 14 digits).");
@@ -1354,7 +1356,7 @@ document.addEventListener("input", (e) => {
    CookTrace. Food, water and gym sets are logged from here into those apps;
    cooking and shopping stay in CookTrace for now. */
 
-const HEALTH_TABS = [["food", "Food"], ["train", "Train"], ["meals", "Meals & Shop"], ["progress", "Progress"]];
+const HEALTH_TABS = [["food", "Food"], ["train", "Train"], ["meals", "Meals & Shop"], ["progress", "Progress"], ["strategy", "Strategy"]];
 const HEALTH_NUTS = [["kcal", "Calories", "kcal", "var(--m-k)"], ["protein", "Protein", "g", "var(--m-p)"],
   ["carbs", "Carbs", "g", "var(--m-c)"], ["fat", "Fat", "g", "var(--m-f)"], ["fibre", "Fibre", "g", "var(--m-fib)"]];
 const fmtN = (n) => (n == null || isNaN(n) ? "—" : Math.round(Number(n)).toLocaleString("en-GB"));
@@ -1389,6 +1391,7 @@ async function screenHealth(rest) {
   if (sub === "food") return screenFood(isoDay(rest[1]));
   if (sub === "train") return screenTrain();
   if (sub === "meals") return screenMeals();
+  if (sub === "strategy") return screenStrategy();
   return screenProgress(rest[1] === "7" ? 7 : 14);
 }
 
@@ -1474,6 +1477,7 @@ async function screenFood(day) {
         ${cur < d.today ? `<a class="iconbtn" href="#health/food/${shiftDay(cur, 1)}" aria-label="Next day">${ic("chev")}</a>` : ""}
       </div></div>
       ${hNotice(d.goals, "The goals")}
+      ${d.checkin_due && cur === d.today ? `<div class="notice info" role="status">${ic("info")}<div><b>Weekly check-in is ready.</b> Review your calorie target for the coming week.<div class="btns"><button type="button" class="btn sm primary" data-act="ciOpen">Start check-in</button></div></div></div>` : ""}
       ${weekPanel(d, cur)}
       ${dayBody}
       <p class="xs muted">Weight history isn't readable by the apps' tokens yet, so it isn't shown here.</p>
@@ -1790,6 +1794,313 @@ async function setSearch(q) {
   } catch (e) { box.innerHTML = notConnected("LiftTrace", e.message); }
 }
 
+/* ---------- Strategy and weekly check-in ----------
+   Targets are kept by the app on the server (NutriTrace's API can't change its
+   goals). They only change when Craig confirms: the check-in proposes, he
+   accepts. The maths here mirrors server/strategy.py for previews only; the
+   server recalculates and checks everything. Nothing goes to Max. */
+
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ST_GOALS = { lose: ["Lose fat", "Eat below maintenance"], maintain: ["Maintain", "Hold steady"], gain: ["Build (gain)", "Eat above maintenance"] };
+const ST_STYLES = {
+  coached: ["Coached", "Hermes recalculates your calories at each weekly check-in from your expenditure and goal rate. You accept each change."],
+  collab: ["Collaborative", "Hermes proposes new targets each week. You can edit the number before accepting."],
+  manual: ["Manual", "Targets stay as you set them. Check-ins show the data but don't propose changes."],
+};
+const ST_DIETS = { balanced: ["Balanced", 0.327, "About a third of calories from fat"], lowfat: ["Lower fat", 0.22, "More room for carbohydrate"], lowcarb: ["Lower carb", 0.42, "Carbohydrate kept lower"], plant: ["Plant-forward", 0.3, "Higher fibre target suggested"] };
+const KCAL_PER_KG = 7700;
+const sgn = (v, d = 0) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+const round5 = (v) => 5 * Math.round(v / 5);
+
+function stDay(s, day) {
+  let k = s.kcal;
+  const nT = (s.train || []).length;
+  if (s.dist === "training" && nT > 0 && nT < 7) k = s.train.includes(day) ? s.kcal + s.shift : Math.round(s.kcal - (s.shift * nT) / (7 - nT));
+  else if (s.dist === "custom") k = Number((s.custom || {})[day]) || s.kcal;
+  const p = Math.round(s.gkg * s.kg), f = Math.round((k * ST_DIETS[s.diet][1]) / 9);
+  return { day, kcal: Math.round(k), protein: p, carbs: Math.max(0, Math.round((k - p * 4 - f * 9) / 4)), fat: f, fibre: s.fib };
+}
+const stWeek = (s) => WEEKDAYS.map((d) => stDay(s, d));
+const goalKg = (s, kg) => (s.goal === "maintain" ? 0 : (s.goal === "lose" ? -1 : 1) * (s.rate / 100) * kg);
+const coachKcal = (s, est) => (est && est.expenditure != null ? Math.max(1300, round5(est.expenditure + (goalKg(s, est.trend_kg || s.kg) * KCAL_PER_KG) / 7)) : null);
+const paceText = (est, goalWk) => {
+  const w = est && est.weekly_change_kg;
+  if (w == null) return "";
+  const verb = w < 0 ? "losing" : "gaining";
+  if (Math.abs(w - goalWk) < 0.02) return `You're ${verb} ${Math.abs(w).toFixed(2)} kg a week, right on pace.`;
+  return `You're ${verb} ${Math.abs(w).toFixed(2)} kg a week; your goal is ${goalWk === 0 ? "to hold steady" : (goalWk < 0 ? "to lose " : "to gain ") + Math.abs(goalWk).toFixed(2) + " kg"}.`;
+};
+const longDay = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+async function strategyView(fresh) {
+  if (!fresh && S.stView) return S.stView;
+  const d = await api("/api/health/strategy");
+  S.stView = d;
+  return d;
+}
+
+async function screenStrategy() {
+  let v;
+  try { v = await strategyView(true); } catch (e) { return healthHead("strategy", "Strategy") + notConnected("Health", e.message); }
+  const s = v.strategy, est = v.estimate;
+  const estPanel = est
+    ? `<section class="panel"><div class="panel-h"><h2>Expenditure</h2>${badge("line", "Estimate")}<div class="r"><a class="link small" href="#health/progress">Open chart</a></div></div>
+        <div class="row-flex" style="gap:28px;flex-wrap:wrap"><div class="kpi"><b style="font-size:28px">${fmtN(est.expenditure)}</b><span>kcal/day</span></div>
+        <span class="small muted">${est.low && est.high ? `Likely ${fmtN(est.low)}–${fmtN(est.high)} · ` : ""}${est.trend_kg != null ? `trend weight ${Number(est.trend_kg).toFixed(1)} kg` : ""}${est.weekly_change_kg != null ? ` (${sgn(est.weekly_change_kg, 2)} kg/week)` : ""}</span></div></section>`
+    : `<div class="notice info" role="status">${ic("info")}<div><b>Expenditure is still calibrating.</b> Check-ins can't propose a number until it has enough logged days and weigh-ins.</div></div>`;
+  if (!s) {
+    return healthHead("strategy", "Strategy", `<button type="button" class="btn primary" data-act="stOpen">Set up strategy</button>`,
+      "Your goal, how fast to go, how calories and macros are set, and how they're spread across the week.") + `<div class="stack s24">
+      <section class="panel"><h2 style="margin-bottom:8px">No strategy yet</h2><p class="small muted">Until you set one, Food and Today use the goals saved in NutriTrace. Setting a strategy takes five short steps. Targets then change only when you accept a weekly check-in.</p>
+      <div class="btns" style="margin-top:14px"><button type="button" class="btn primary" data-act="stOpen">Set up strategy</button></div></section>
+      ${estPanel}</div>`;
+  }
+  const wk = v.week, todayRow = wk.find((x) => x.day === v.weekday) || wk[0];
+  const total = wk.reduce((a, x) => a + x.kcal, 0);
+  const pr = v.proposal;
+  const prog = v.program;
+  const goalWk = pr ? pr.goal_kg_week : goalKg(s, s.kg);
+  const coach = s.style === "manual" ? "" : `<section class="panel"><div class="panel-h"><h2>${v.due ? "Weekly check-in is due" : "Next check-in"}</h2>${badge("line", ST_STYLES[s.style][0])}<div class="r"><button type="button" class="btn ${v.due ? "primary " : ""}sm" data-act="ciOpen">${v.due ? "Start check-in" : "Check in early"}</button></div></div>
+      ${pr ? `<p class="small">To ${s.goal === "maintain" ? "hold your weight" : `${s.goal === "lose" ? "lose" : "gain"} ${Math.abs(goalWk).toFixed(2)} kg a week`}, Hermes suggests <b class="num">${fmtN(pr.kcal)} kcal a day</b> on average (${pr.delta === 0 ? "no change" : sgn(pr.delta) + " kcal"} from now). ${esc(paceText(est, goalWk))}</p>`
+        : `<p class="small muted">No proposal while expenditure is calibrating. You can still keep, lower or raise your target.</p>`}
+      <p class="xs muted" style="margin-top:6px">${v.due ? "Due now." : `Due ${esc(longDay(v.next_checkin))}.`} Nothing changes until you accept.</p></section>`;
+  const phaseNote = v.phase_change && prog && prog.current
+    ? `<div class="notice info" role="status">${ic("info")}<div><b>${esc(prog.current.name)} started on ${esc(longDay(prog.current.start))}.</b> Switch your goal to match it? Your calories are recalculated from your expenditure.<div class="btns"><button type="button" class="btn sm primary" data-act="ciGo" data-arg="phase">Switch to ${esc(prog.current.name)}</button></div></div></div>` : "";
+  const phTotal = prog ? prog.phases.reduce((a, p) => a + p.weeks, 0) : 0;
+  return healthHead("strategy", "Strategy", `<button type="button" class="btn" data-act="ciOpen">Weekly check-in</button><button type="button" class="btn primary" data-act="stOpen">Edit strategy</button>`,
+    "Your goal, how fast to go, how calories and macros are set, and how they're spread across the week.") + `<div class="stack s24">
+    ${phaseNote}
+    ${v.pending ? `<div class="notice info" role="status">${ic("info")}<div><b>New targets start ${esc(longDay(s.from))}.</b> Until then, the earlier targets still apply.</div></div>` : ""}
+    <div class="tpl-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+      <div class="panel"><div class="xs muted">Goal</div><div class="kpi" style="margin-top:6px"><b style="font-size:24px">${ST_GOALS[s.goal][0]}</b></div><p class="small muted" style="margin-top:6px">${s.goal === "maintain" ? "Hold weight steady" : `${s.rate}% of body weight per week · about ${((s.rate / 100) * s.kg).toFixed(2)} kg`}</p></div>
+      <div class="panel"><div class="xs muted">Calories · weekly average</div><div class="kpi" style="margin-top:6px"><b style="font-size:24px">${fmtN(total / 7)}</b><span>kcal</span></div><p class="small muted" style="margin-top:6px">${s.style === "manual" ? "Fixed target, set by you" : ST_STYLES[s.style][0] + " · updated at check-ins"} · ${fmtN(total)} kcal per week</p></div>
+      <div class="panel"><div class="xs muted">Macros</div><div class="kpi" style="margin-top:6px"><b style="font-size:24px">${ST_DIETS[s.diet][0]}</b></div><p class="small muted" style="margin-top:6px">Protein ${s.gkg} g/kg (${todayRow.protein} g) · Fibre ${s.fib} g</p></div>
+      <div class="panel"><div class="xs muted">Weekly spread</div><div class="kpi" style="margin-top:6px"><b style="font-size:24px">${s.dist === "even" ? "Even" : s.dist === "training" ? "Training days +" + s.shift : "Custom"}</b></div><p class="small muted" style="margin-top:6px">${s.dist === "training" ? "Higher on " + s.train.join(", ") : s.dist === "custom" ? "Set day by day" : "Same target every day"}</p></div>
+    </div>
+    ${estPanel}
+    ${coach}
+    <section class="panel"><div class="panel-h"><h2>This week's targets</h2><span class="xs muted">Effective ${esc(longDay(s.from))}</span></div>
+      <div class="tbl-wrap"><table class="tbl st-wk"><thead><tr><th>Day</th><th class="r">kcal</th><th class="r"><abbr title="Protein">P</abbr></th><th class="r"><abbr title="Carbohydrate">C</abbr></th><th class="r"><abbr title="Fat">F</abbr></th><th class="r">Fibre</th></tr></thead><tbody>${wk.map((x) => `<tr${x.day === v.weekday ? ' style="font-weight:600"' : ""}><td>${x.day}${x.day === v.weekday ? " · today" : ""}${s.dist === "training" && s.train.includes(x.day) ? ` <span class="st-tr" title="Training day">${ic("dumbbell", 14)}</span>` : ""}</td><td class="r num">${fmtN(x.kcal)}</td><td class="r num">${x.protein}</td><td class="r num">${x.carbs}</td><td class="r num">${x.fat}</td><td class="r num">${x.fibre}</td></tr>`).join("")}</tbody></table></div><p class="xs muted" style="margin-top:8px">Grams for protein, carbohydrate, fat and fibre.${s.dist === "training" ? " The dumbbell marks training days." : ""}</p></section>
+    <section class="panel"><div class="panel-h"><h2>Program</h2>${prog ? `<span class="xs muted">${phTotal} weeks · phases run one after another</span>` : ""}<div class="r"><button type="button" class="btn sm" data-act="progOpen">${prog ? "Edit program" : "Plan phases"}</button></div></div>
+      ${prog ? `<div class="phase-bar" role="list">${prog.phases.map((p) => `<div class="phase ph-${p.type}${p.status === "current" ? " cur" : ""}" style="flex:${p.weeks}" role="listitem">${p.status === "current" ? "<i>Now</i>" : ""}<b>${esc(p.name)}</b><span>${p.weeks} wk · from ${esc(dayName(p.start).split(" ").slice(1).join(" "))}</span><span>${p.type === "maintain" ? "Hold" : (p.type === "lose" ? "−" : "+") + p.rate + "%/wk"}${p.status === "done" ? " · done" : ""}</span></div>`).join("")}</div>
+        <p class="xs muted" style="margin-top:10px">On each phase's start date Hermes asks you here before switching. It never changes targets by itself.</p>`
+        : `<p class="small muted">Optional: plan phases such as fat loss, then maintenance, then a lean gain.</p>`}</section>
+    <section class="panel"><div class="panel-h"><h2>Check-in history</h2></div>${v.checkins.length ? `<ul class="timeline">${v.checkins.map((c) => `<li><span class="when">${esc(longDay(c.date))}</span><br><b>${esc(c.decision)}</b> · ${esc(c.note)}</li>`).join("")}</ul>` : `<p class="small muted">No check-ins yet.</p>`}</section>
+  </div>`;
+}
+
+/* The five Edit strategy steps. Text boxes are read when a button is pressed;
+   sliders, choices and chips redraw the dialog. */
+function stDefaults(v) {
+  const est = v.estimate || {};
+  const kg = est.trend_kg ? Math.round(est.trend_kg * 10) / 10 : 80;
+  const d = { goal: "lose", rate: 0.4, style: "coached", kcal: 2200, diet: "balanced", gkg: 1.8, fib: 30, dist: "even", shift: 200, train: ["Mon", "Wed", "Fri"], custom: {}, kg };
+  const c = coachKcal(d, v.estimate);
+  if (c) d.kcal = c;
+  return d;
+}
+
+async function openStrategy() {
+  let v;
+  try { v = await strategyView(true); } catch (e) { return toast(e.message); }
+  const d = v.strategy ? JSON.parse(JSON.stringify(v.strategy)) : stDefaults(v);
+  delete d.from;
+  if (v.estimate && v.estimate.trend_kg) d.kg = Math.round(v.estimate.trend_kg * 10) / 10;
+  S.stw = { step: 1, d, eff: "today", old: v.strategy };
+  drawStrategy();
+}
+
+function readStw() {
+  const w = S.stw, d = w.d, val = (id) => { const el = $("#" + id); return el ? el.value : null; };
+  const num = (id, key) => { const x = val(id); if (x != null && x !== "") d[key] = Number(x); };
+  num("stw-rate", "rate"); num("stw-k", "kcal"); num("stw-p", "gkg"); num("stw-f", "fib"); num("stw-kg", "kg"); num("stw-sh", "shift");
+  WEEKDAYS.forEach((day) => { const x = val("stw-c-" + day); if (x != null && x !== "") d.custom[day] = Number(x); });
+}
+
+function drawStrategy() {
+  const w = S.stw, d = w.d, v = S.stView || {}, est = v.estimate;
+  const steps = ["Goal", "Calories", "Macros", "Weekly spread", "Review"];
+  const head = `<div class="steps" style="margin-bottom:16px">${steps.map((s, i) => `<span class="${i + 1 < w.step ? "done" : i + 1 === w.step ? "on" : ""}">${i + 1}. ${s}</span>`).join("")}</div>`;
+  const seg = (opts, cur, actName) => `<div class="seg" role="group">${opts.map(([k, l]) => `<button type="button" aria-pressed="${cur === k}" data-act="${actName}" data-arg="${k}">${esc(l)}</button>`).join("")}</div>`;
+  const calc = coachKcal(d, est);
+  let body = "";
+  if (w.step === 1) {
+    body = `<div class="tpl-grid compact">${Object.entries(ST_GOALS).map(([k, [l, s]]) => `<button type="button" class="tpl${d.goal === k ? " on" : ""}" data-act="stwSet" data-arg="goal|${k}" aria-pressed="${d.goal === k}"><b>${l}</b><span class="xs muted">${s}</span></button>`).join("")}</div>
+      ${d.goal !== "maintain" ? `<div class="field" style="margin-top:16px"><label for="stw-rate">Target rate: <b>${d.rate}% of body weight per week</b> · about ${((d.rate / 100) * d.kg).toFixed(2)} kg/week</label><input type="range" id="stw-rate" min="0.1" max="1" step="0.05" value="${d.rate}" style="accent-color:var(--accent)"><span class="hint">${d.goal === "lose" ? "Slower rates are easier to sustain and keep more muscle." : "Slower gains keep fat gain lower."}</span></div>` : ""}`;
+  } else if (w.step === 2) {
+    body = `<div class="field"><span class="lab">How targets are managed</span>${seg(Object.entries(ST_STYLES).map(([k, x]) => [k, x[0]]), d.style, "stwStyle")}<span class="hint">${esc(ST_STYLES[d.style][1])}</span></div>
+      ${calc ? `<div class="card-inset" style="margin-top:14px"><span class="small">Expenditure <b class="num">${fmtN(est.expenditure)}</b>${d.goal === "maintain" ? "" : ` ${d.goal === "lose" ? "−" : "+"} ${fmtN(Math.abs(Math.round((goalKg(d, est.trend_kg || d.kg) * KCAL_PER_KG) / 7)))} for ${Math.abs(goalKg(d, est.trend_kg || d.kg)).toFixed(2)} kg/week`} = <b class="num">${fmtN(calc)} kcal</b></span></div>`
+        : `<p class="small muted" style="margin-top:14px">Expenditure is still calibrating, so set a starting number yourself. Check-ins will propose changes once it's ready.</p>`}
+      ${d.style === "coached" && calc ? `<p class="small" style="margin-top:12px">Average daily calories: <b class="num">${fmtN(calc)} kcal</b>, recalculated at each check-in when you accept.</p>`
+        : `<div class="field" style="margin-top:12px"><label for="stw-k">Average daily calories</label><input class="inp num" id="stw-k" inputmode="numeric" value="${esc(d.kcal)}" style="max-width:180px">${calc ? `<button type="button" class="btn ghost sm" data-act="stwCalc" style="margin-top:6px">Use ${fmtN(calc)}</button>` : ""}<span class="hint">The spread in step 4 keeps this as the weekly average.</span></div>`}`;
+  } else if (w.step === 3) {
+    const t = stDay(d, v.weekday || "Mon");
+    body = `<div class="tpl-grid compact" style="grid-template-columns:repeat(2,minmax(0,1fr))">${Object.entries(ST_DIETS).map(([k, x]) => `<button type="button" class="tpl${d.diet === k ? " on" : ""}" data-act="stwSet" data-arg="diet|${k}" aria-pressed="${d.diet === k}"><b>${x[0]}</b><span class="xs muted">${x[2]}</span></button>`).join("")}</div>
+      <div class="form-grid" style="margin-top:16px"><div class="field full"><label for="stw-p">Protein: <b>${d.gkg} g per kg</b> (${Math.round(d.gkg * d.kg)} g)</label><input type="range" id="stw-p" min="1.2" max="2.4" step="0.02" value="${d.gkg}" style="accent-color:var(--accent)"></div>
+      <div class="field"><label for="stw-f">Fibre target (g)</label><input class="inp num" id="stw-f" inputmode="numeric" value="${esc(d.fib)}"></div>
+      <div class="field"><label for="stw-kg">Body weight for protein (kg)</label><input class="inp num" id="stw-kg" inputmode="decimal" value="${esc(d.kg)}"><span class="hint">${est && est.trend_kg ? "From your trend weight." : "No trend weight yet."}</span></div></div>
+      <p class="small">Today: <b class="num">P ${t.protein} g · C ${t.carbs} g · F ${t.fat} g</b></p>`;
+  } else if (w.step === 4) {
+    const wk = stWeek(d), tot = wk.reduce((a, x) => a + x.kcal, 0);
+    body = `${seg([["even", "Even"], ["training", "Higher on training days"], ["custom", "Custom per day"]], d.dist, "stwDist")}
+      ${d.dist === "training" ? `<div class="field" style="margin-top:14px"><span class="lab">Training days</span><div class="chips">${WEEKDAYS.map((x) => `<button type="button" class="chip" aria-pressed="${d.train.includes(x)}" data-act="stwTrain" data-arg="${x}">${x}</button>`).join("")}</div></div>
+        <div class="field"><label for="stw-sh">Extra on training days: <b>${d.shift} kcal</b></label><input type="range" id="stw-sh" min="50" max="500" step="25" value="${d.shift}" style="accent-color:var(--accent)"></div>` : ""}
+      ${d.dist === "custom" ? `<div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(80px,1fr));margin-top:14px">${WEEKDAYS.map((x) => `<div class="field"><label for="stw-c-${x}">${x}</label><input class="inp num" id="stw-c-${x}" inputmode="numeric" value="${esc(d.custom[x] || d.kcal)}"></div>`).join("")}</div><button type="button" class="btn ghost sm" data-act="stwRedraw">Update preview</button>` : ""}
+      <div class="wk-bars" aria-label="Calories by day" style="margin-top:14px">${wk.map((x) => `<div><span style="height:${Math.round(x.kcal / 35)}px"></span><b>${fmtN(x.kcal)}</b><i>${x.day}</i></div>`).join("")}</div>
+      <p class="small muted">Weekly total ${fmtN(tot)} kcal · average ${fmtN(tot / 7)}</p>`;
+  } else {
+    const nw = stWeek(d), old = w.old ? stWeek(w.old) : null;
+    const today = v.today || "";
+    const monday = today ? shiftDay(today, 7 - ((new Date(today + "T12:00:00").getDay() + 6) % 7)) : "";
+    body = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Day</th>${old ? '<th class="r">Now</th>' : ""}<th class="r">New</th><th class="r">P / C / F / Fibre</th></tr></thead><tbody>${nw.map((x, i) => `<tr><td>${x.day}</td>${old ? `<td class="r num">${fmtN(old[i].kcal)}</td>` : ""}<td class="r num"><b>${fmtN(x.kcal)}</b></td><td class="r small num">${x.protein} / ${x.carbs} / ${x.fat} / ${x.fibre} g</td></tr>`).join("")}</tbody></table></div>
+      <div class="field" style="margin-top:14px"><span class="lab">Effective from</span>${seg([["today", "Today" + (today ? ", " + dayName(today).split(" ").slice(1).join(" ") : "")], ["monday", "Monday" + (monday ? " " + dayName(monday).split(" ").slice(1).join(" ") : "")]], w.eff, "stwEff")}<span class="hint">Earlier days keep the targets that applied to them.</span></div>`;
+  }
+  const foot = `${w.step > 1 ? `<button type="button" class="btn ghost" data-act="stwStep" data-arg="${w.step - 1}">Back</button>` : '<button type="button" class="btn ghost" data-act="close">Cancel</button>'}${w.step < 5 ? `<button type="button" class="btn primary" data-act="stwStep" data-arg="${w.step + 1}">Continue</button>` : '<button type="button" class="btn primary" data-act="stwSave">Confirm strategy</button>'}`;
+  modal(S.stw.old ? "Edit strategy" : "Set up strategy", head + body, foot);
+}
+
+function stwCheck() {
+  const d = S.stw.d;
+  if (d.style === "coached") { const c = coachKcal(d, (S.stView || {}).estimate); if (c) d.kcal = c; }
+  if (!(d.kcal >= 1000 && d.kcal <= 6000)) { S.stw.step = 2; return "Enter average calories between 1,000 and 6,000."; }
+  if (!(d.kg >= 30 && d.kg <= 300)) { S.stw.step = 3; return "Enter a body weight between 30 and 300 kg."; }
+  if (!(d.fib >= 10 && d.fib <= 80)) { S.stw.step = 3; return "Enter a fibre target between 10 and 80 g."; }
+  if (d.dist === "training" && !(d.train.length > 0 && d.train.length < 7)) { S.stw.step = 4; return "Pick between 1 and 6 training days."; }
+  if (d.dist === "custom" && WEEKDAYS.some((x) => !((d.custom[x] || d.kcal) >= 1000 && (d.custom[x] || d.kcal) <= 6000))) { S.stw.step = 4; return "Each day needs between 1,000 and 6,000 kcal."; }
+  return "";
+}
+
+// Check-in: the proposal, and the choices. Targets change only on a choice here.
+async function openCheckin() {
+  let v;
+  try { v = await strategyView(true); } catch (e) { return toast(e.message); }
+  if (!v.strategy) return openStrategy();
+  const s = v.strategy, est = v.estimate, pr = v.proposal;
+  const goalWk = pr ? pr.goal_kg_week : goalKg(s, s.kg);
+  const tiles = `<div class="tpl-grid" style="grid-template-columns:repeat(auto-fit,minmax(108px,1fr))">
+    <div class="card-inset"><span class="xs muted">Expenditure</span><b class="num" style="font-size:20px">${est ? fmtN(est.expenditure) + " kcal" : "—"}</b><span class="xs muted">${est ? (est.low && est.high ? `likely ${fmtN(est.low)}–${fmtN(est.high)}` : "estimate") : "Calibrating"}</span></div>
+    <div class="card-inset"><span class="xs muted">Trend weight</span><b class="num" style="font-size:20px">${est && est.trend_kg != null ? Number(est.trend_kg).toFixed(1) + " kg" : "—"}</b><span class="xs muted">${est && est.weekly_change_kg != null ? sgn(est.weekly_change_kg, 2) + " kg/week" : ""}</span></div>
+    <div class="card-inset"><span class="xs muted">Current target</span><b class="num" style="font-size:20px">${fmtN(s.kcal)} kcal</b><span class="xs muted">average a day</span></div>
+    <div class="card-inset"><span class="xs muted">Goal rate</span><b class="num" style="font-size:20px">${s.goal === "maintain" ? "Hold" : sgn(goalWk, 2) + " kg"}</b><span class="xs muted">${s.goal === "maintain" ? "maintain weight" : "per week · " + s.rate + "%"}</span></div></div>`;
+  const choices = (list) => `<div class="list" style="margin-top:14px">${list.map(([k, l, sub]) => `<button type="button" class="li" data-act="ciGo" data-arg="${k}" style="width:100%;text-align:left"><span class="main"><span class="t">${l}</span>${sub ? `<span class="s">${sub}</span>` : ""}</span>${ic("chev")}</button>`).join("")}</div>`;
+  const others = [["keep", `Keep ${fmtN(s.kcal)} kcal`, "No change"], ["minus", "Lower by 100 kcal a day", "From today"], ["plus", "Raise by 100 kcal a day", "From today"]];
+  if (!pr) {
+    return modal("Weekly check-in", `<p class="small muted" style="margin-bottom:12px">${s.style === "manual" ? "Manual strategy: here's your week. Targets stay as you set them unless you change them." : "Expenditure is still calibrating, so there's no proposal yet."}</p>${tiles}${choices(others)}`,
+      `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn" data-act="stOpen">Edit the full strategy</button>`);
+  }
+  modal("Weekly check-in", `${tiles}
+    <div class="coach-prop" style="margin-top:14px"><div><span class="xs muted">New average daily target</span><div class="kpi"><b style="font-size:34px" id="ci-show">${fmtN(pr.kcal)}</b><span>kcal</span></div><span class="small">${pr.delta === 0 ? "No change" : sgn(pr.delta) + " kcal from " + fmtN(s.kcal)}</span></div>
+      <p class="small" style="flex:1;min-width:220px">${esc(paceText(est, goalWk))} Expenditure ${fmtN(pr.expenditure)} kcal${s.goal === "maintain" ? "" : ` ${s.goal === "lose" ? "−" : "+"} ${fmtN(Math.abs(pr.goal_kcal_day))} kcal for your rate`} = ${fmtN(pr.kcal)} kcal.</p></div>
+    ${s.style === "collab" ? `<div class="field" style="margin-top:12px"><label for="ci-k">Adjust before accepting (kcal)</label><input class="inp num" id="ci-k" inputmode="numeric" value="${pr.kcal}" style="max-width:160px"></div>` : ""}
+    ${choices(others)}
+    <p class="xs muted" style="margin-top:10px">Accepting applies from today. Earlier days keep their targets.</p>`,
+    `<button type="button" class="btn ghost" data-act="close">Not now</button><button type="button" class="btn primary" data-act="ciGo" data-arg="accept">Accept ${s.style === "collab" ? "" : fmtN(pr.kcal) + " kcal"}</button>`);
+}
+
+// Program phases editor.
+async function openProgram() {
+  let v;
+  try { v = await strategyView(true); } catch (e) { return toast(e.message); }
+  const p = v.program;
+  S.prog = p ? { start: p.start, phases: p.phases.map(({ type, name, weeks, rate }) => ({ type, name, weeks, rate })) }
+    : { start: v.today, phases: [{ type: "lose", name: "Fat loss", weeks: 8, rate: 0.4 }, { type: "maintain", name: "Maintenance", weeks: 2, rate: 0 }] };
+  drawProgram();
+}
+function readProg() {
+  const p = S.prog;
+  const st = $("#pg-start"); if (st) p.start = st.value;
+  p.phases.forEach((ph, i) => {
+    const g = (k) => { const el = $(`#pg-${k}-${i}`); return el ? el.value : null; };
+    ph.name = g("name") ?? ph.name; ph.type = g("type") ?? ph.type;
+    ph.weeks = Number(g("weeks") ?? ph.weeks); ph.rate = Number(g("rate") ?? ph.rate);
+  });
+}
+function drawProgram() {
+  const p = S.prog;
+  modal("Program", `<div class="field"><label for="pg-start">First phase starts</label><input class="inp" type="date" id="pg-start" value="${esc(p.start)}" style="max-width:200px"></div>
+    <div class="stack s8" style="margin-top:12px">${p.phases.map((ph, i) => `<div class="card-inset"><div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">
+      <div class="field"><label for="pg-name-${i}">Name</label><input class="inp" id="pg-name-${i}" maxlength="40" value="${esc(ph.name)}"></div>
+      <div class="field"><label for="pg-type-${i}">Type</label><select class="inp" id="pg-type-${i}">${Object.entries(ST_GOALS).map(([k, [l]]) => `<option value="${k}"${ph.type === k ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="field"><label for="pg-weeks-${i}">Weeks</label><input class="inp num" id="pg-weeks-${i}" inputmode="numeric" value="${esc(ph.weeks)}"></div>
+      <div class="field"><label for="pg-rate-${i}">Rate (% a week)</label><input class="inp num" id="pg-rate-${i}" inputmode="decimal" value="${esc(ph.rate)}"${ph.type === "maintain" ? " disabled" : ""}></div>
+    </div>${p.phases.length > 1 ? `<button type="button" class="btn ghost sm" data-act="progDel" data-arg="${i}" style="margin-top:6px">Remove</button>` : ""}</div>`).join("")}</div>
+    ${p.phases.length < 8 ? `<button type="button" class="btn sm" data-act="progAdd" style="margin-top:10px">${ic("plus", 15)}Add phase</button>` : ""}
+    <p class="xs muted" style="margin-top:12px">Phases run one after another. When a new one starts, Hermes asks you on the Strategy screen before switching.</p>`,
+    `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="progSave">Save program</button>`);
+}
+
+const STRAT_ACTS = {
+  stOpen: () => openStrategy(),
+  ciOpen: () => openCheckin(),
+  progOpen: () => openProgram(),
+  stwSet: (arg) => { readStw(); const [k, v] = arg.split("|"); S.stw.d[k] = v; if (k === "diet" && v === "plant" && S.stw.d.fib < 35) S.stw.d.fib = 35; drawStrategy(); },
+  stwStyle: (v) => { readStw(); S.stw.d.style = v; drawStrategy(); },
+  stwDist: (v) => { readStw(); S.stw.d.dist = v; drawStrategy(); },
+  stwEff: (v) => { S.stw.eff = v; drawStrategy(); },
+  stwCalc: () => { readStw(); const c = coachKcal(S.stw.d, (S.stView || {}).estimate); if (c) S.stw.d.kcal = c; drawStrategy(); },
+  stwRedraw: () => { readStw(); drawStrategy(); },
+  stwTrain: (day) => { readStw(); const d = S.stw.d; d.train = d.train.includes(day) ? d.train.filter((x) => x !== day) : WEEKDAYS.filter((x) => x === day || d.train.includes(x)); drawStrategy(); },
+  stwStep: (n) => {
+    readStw();
+    const back = Number(n) < S.stw.step;
+    S.stw.step = Number(n);
+    const err = back ? "" : stwCheck();
+    if (err) toast(err);
+    drawStrategy();
+  },
+  stwSave: async (_, el, busy) => {
+    readStw();
+    const err = stwCheck();
+    if (err) { toast(err); return drawStrategy(); }
+    busy(true);
+    try {
+      S.stView = await api("/api/health/strategy", { body: { strategy: S.stw.d, effective: S.stw.eff } });
+      closeModal();
+      toast(S.stView.pending ? "Strategy saved. It starts on Monday." : "Strategy saved. Your targets apply from today.");
+      if ((location.hash || "") === "#health/strategy") render(); else location.hash = "#health/strategy";
+    } finally { busy(false); }
+  },
+  ciGo: async (action, el, busy) => {
+    const body = { action };
+    const k = $("#ci-k");
+    if (action === "accept" && k) {
+      const n = Number(k.value);
+      if (!(n >= 1000 && n <= 6000)) return toast("Enter between 1,000 and 6,000 kcal.");
+      body.kcal = n;
+    }
+    busy(true);
+    try {
+      const v = await api("/api/health/checkin", { body });
+      S.stView = v;
+      closeModal();
+      toast(v.checkins[0] ? v.checkins[0].decision + "." : "Check-in saved.");
+      if ((location.hash || "") === "#health/strategy") render(); else location.hash = "#health/strategy";
+    } finally { busy(false); }
+  },
+  progAdd: () => { readProg(); S.prog.phases.push({ type: "maintain", name: "Maintenance", weeks: 2, rate: 0 }); drawProgram(); },
+  progDel: (i) => { readProg(); S.prog.phases.splice(Number(i), 1); drawProgram(); },
+  progSave: async (_, el, busy) => {
+    readProg();
+    if (S.prog.phases.some((ph) => !ph.name.trim())) return toast("Give each phase a name.");
+    if (S.prog.phases.some((ph) => !(ph.weeks >= 1 && ph.weeks <= 52))) return toast("Each phase needs 1 to 52 weeks.");
+    if (S.prog.phases.some((ph) => ph.type !== "maintain" && !(ph.rate >= 0.1 && ph.rate <= 1))) return toast("Rates go from 0.1% to 1% a week.");
+    busy(true);
+    try {
+      S.stView = await api("/api/health/program", { body: S.prog });
+      closeModal();
+      toast("Program saved.");
+      render();
+    } finally { busy(false); }
+  },
+};
+
+// Sliders, the phase type and other choices redraw their dialog when they settle.
+document.addEventListener("change", (e) => {
+  const id = e.target.id || "";
+  if (S.stw && /^stw-(rate|p|sh)$/.test(id)) { readStw(); drawStrategy(); }
+  if (S.prog && /^pg-type-\d+$/.test(id)) { readProg(); drawProgram(); }
+});
+
 /* ---------- Meals & Shop ---------- */
 
 async function screenMeals() {
@@ -2065,6 +2376,8 @@ async function render() {
   if (!S.cache.approvals && area !== "approvals") load("approvals", "/api/approvals").then(() => renderShell(route));
   renderShell(route);
   $("#main").innerHTML = html;
+  const tab = $('#main .tabs [aria-current="page"]'); // keep the open tab in view on narrow screens
+  if (tab) tab.parentElement.scrollLeft = Math.max(0, tab.offsetLeft + tab.offsetWidth - tab.parentElement.clientWidth + 16);
   if (area === "health" && rest[0] === "scan") startScan();
   if (area === "work" && !rest.length && S.workView === "board") wireBoard();
   if (area === "health" && rest[0] === "progress") drawProgressCharts();

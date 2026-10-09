@@ -57,3 +57,7 @@ a.spark-card { text-decoration: none; color: inherit; }
 .uchart .u-legend{font-size:12px;color:var(--fg-2);text-align:left;margin-top:4px}
 .uchart .u-legend .u-marker{border-radius:3px}
 .uchart .u-legend tr:first-child th{display:none}
+/* Strategy: the week's targets stay a compact table on phones */
+.st-wk td, .st-wk th { white-space: nowrap; }
+.st-wk .st-tr { color: var(--fg-3); vertical-align: -2px; }
+@media (max-width: 560px) { .st-wk td, .st-wk th { padding-left: 6px; padding-right: 6px; font-size: 13px; } }

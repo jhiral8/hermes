@@ -211,6 +211,17 @@ tokens. It never edits or deletes. Nothing goes to Max or any model.
    lists NutriTrace foods; Train > Log a set lists LiftTrace exercises.
    Without the write key the screens say the write token isn't set up.
 
+## Strategy and weekly check-in
+
+Calorie and macro targets are kept by the app in `strategy.json`, next to the
+saved foods (`/var/lib/hermes-app/`), or at `health.strategy_file` if set.
+NutriTrace's goals are left as they are; once a strategy exists, Food, Today
+and Progress use the app's targets instead. Targets change only when Craig
+confirms the strategy steps, accepts a check-in, or switches program phase.
+Nothing is sent to NutriTrace or to Max.
+
+Install: `git pull`, then restart hermes-app. No config change is needed.
+
 ## Phase 5: Inbox (real Gmail, read-only)
 
 Craig's own mail, shown only to him in the app. Read-only: the app calls

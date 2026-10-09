@@ -14,6 +14,7 @@ It holds no send power and no model keys.
 """
 
 import argparse
+import datetime
 import json
 import mimetypes
 import os
@@ -36,6 +37,7 @@ from chat import ChatError, DemoMax, MaxChat
 from demo import Demo
 from health import Health, Refused
 from health_log import HealthLog
+from strategy import Strategy
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
@@ -301,11 +303,26 @@ def make_foods(cfg, app):
     return Foods(Lookup(fc), SavedFoods(fc.get("store_path")))
 
 
+def make_strategy(cfg, app, health):
+    """Calorie and macro targets plus the weekly check-in, kept in a file next to
+    the saved foods (in memory in sample-data mode)."""
+    if health is None:
+        return None
+    if app.demo:
+        return Strategy(None, health)
+    path = (cfg.get("health") or {}).get("strategy_file")
+    if not path:
+        # Next to the app's other files: the saved foods, or else the action log.
+        near = (cfg.get("foods") or {}).get("store_path") or cfg.get("audit_log")
+        path = str(Path(near).with_name("strategy.json")) if near else None
+    return Strategy(path, health)
+
+
 def _today_london():
     return Health({}).today()
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None):
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -326,6 +343,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         library = make_library(cfg, app)
     library_cfg = cfg.get("library") or {}
     hlog = HealthLog(health) if health is not None else None
+    if strategy is None:
+        strategy = make_strategy(cfg, app, health)
 
     get_routes = {
         "/api/today": app.today,
@@ -452,6 +471,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     result = self._chat_post(user, parts[2:], body)
                 elif parts == ["api", "health", "foods"]:
                     result = self._foods_do(lambda: foods.save(body))
+                elif parts[:2] == ["api", "health"] and len(parts) == 3 and parts[2] in ("strategy", "checkin", "program"):
+                    result = self._strategy_post(user, parts[2], body)
                 elif parts[:3] == ["api", "health", "log"] and len(parts) == 4:
                     result = self._health_log(user, parts[3], body)
                 else:
@@ -574,6 +595,11 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     out = health.meals()
                 elif what == "progress":
                     out = health.progress(int((q.get("days") or ["14"])[0]))
+                elif what == "strategy":
+                    out = self._strategy_do(strategy.view) if strategy else None
+                    if out is None:
+                        self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
+                        return
                 elif what in ("search/foods", "search/exercises"):
                     term = (q.get("q") or [""])[0]
                     try:
@@ -587,7 +613,32 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             except ValueError:
                 self._json(400, {"error": "Bad date."})
                 return
+            except ActionError as e:
+                self._json(e.code, {"ok": False, "error": str(e), **app.meta()})
+                return
+            if what in ("food", "progress") and strategy is not None:
+                self._strategy_goals(out)
             self._json(200, {"ok": True, **out, **app.meta()})
+
+        def _strategy_goals(self, out):
+            """The app's own targets replace NutriTrace's goals once a strategy is set."""
+            try:
+                day = datetime.date.fromisoformat((out.get("day") or {}).get("data", {}).get("date") or out["today"])
+                t = strategy.targets_for(day)
+                view = strategy.view()
+            except (SourceError, KeyError, ValueError):
+                return
+            if t:
+                out["goals"] = {"ok": True, "data": t, "source": "strategy"}
+            out["checkin_due"] = view["due"]
+
+        def _strategy_do(self, fn):
+            try:
+                return fn()
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            except ValueError as e:
+                raise ActionError(400, str(e))
 
         def _foods_do(self, fn):
             if foods is None:
@@ -616,6 +667,16 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 raise ActionError(503, str(e))
             # The audit line says what kind of entry was added, not what was eaten or lifted.
             app.audit(user, "health_" + kind.replace("-", "_"), {"date": out.get("date")})
+            return {"ok": True, **out, **app.meta()}
+
+        def _strategy_post(self, user, kind, body):
+            """Targets change only here: Craig confirming a strategy, a check-in or a program."""
+            if strategy is None:
+                raise ActionError(503, "Health isn't connected on the server yet.")
+            fn = {"strategy": strategy.save, "checkin": strategy.checkin, "program": strategy.set_program}[kind]
+            out = self._strategy_do(lambda: fn(body))
+            detail = {"choice": body.get("action")} if kind == "checkin" else {}
+            app.audit(user, "health_" + kind, detail)
             return {"ok": True, **out, **app.meta()}
 
         def _foods_get(self, what):
