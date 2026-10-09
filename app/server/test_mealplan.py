@@ -13,7 +13,7 @@ import hermes_app as h
 from api import App
 from health import Health
 from health_log import HealthLog
-from mealplan import MealPlan, ask_max, propose_week
+from mealplan import DEFAULT_PREFS, MealPlan, ask_max, check_prefs, propose_week
 from strategy import Strategy
 from chat import DemoMax
 from test_health import LOGIN, TODAY
@@ -124,16 +124,54 @@ class Proposals(unittest.TestCase):
         demo_health.reset()
         self.addCleanup(demo_health.reset)
 
-    def test_planner_fits_targets(self):
+    def ctx(self, **kw):
         recipes = [{"id": 1, "name": "A", "kcal": 500, "protein": 40}, {"id": 2, "name": "B", "kcal": 400, "protein": 10},
                    {"id": 3, "name": "C", "kcal": 300, "protein": 30}]
-        out = propose_week(["2026-10-09"], recipes, {"2026-10-09": {"kcal": 2000, "protein": 150}},
-                           {"2026-10-09": {"meals": {"lunch"}, "kcal": 700}})
+        base = {"days": ["2026-10-09"], "recipes": recipes, "targets": {"2026-10-09": {"kcal": 2000, "protein": 150}},
+                "taken": {"2026-10-09": {"meals": {"lunch"}, "kcal": 700}}, "prefs": dict(DEFAULT_PREFS), "ratings": {},
+                "training": set(), "strategy": None}
+        return {**base, **kw}
+
+    def test_planner_fits_targets(self):
+        out = propose_week(self.ctx())
         self.assertEqual([x["meal"] for x in out], ["breakfast", "dinner"])
         self.assertLess(abs(sum(x["kcal"] for x in out) - 1300), 250)
         self.assertEqual(len({x["recipe_id"] for x in out}), 2)  # no repeat in a day
-        with self.assertRaises(ValueError):
-            propose_week(["2026-10-09"], [{"id": 9, "name": "x", "kcal": None}], {}, {})
+
+    def test_preferences_steer_the_planner(self):
+        week = ["2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12"]
+        targets = {d: {"kcal": 1500, "protein": 120} for d in week}
+        r = [{"id": i, "name": f"R{i}", "kcal": 500, "protein": 40} for i in range(1, 7)]
+        plain = propose_week(self.ctx(days=week, recipes=r, targets=targets, taken={}))
+        fav = propose_week(self.ctx(days=week, recipes=r, targets=targets, taken={},
+                                    prefs={**DEFAULT_PREFS, "favourites": ["6"], "leftovers": False}))
+        self.assertGreater(sum(x["recipe_id"] == 6 for x in fav), sum(x["recipe_id"] == 6 for x in plain))
+        self.assertIn("favourite", [x.get("why") for x in fav if x["recipe_id"] == 6][0])
+        capped = propose_week(self.ctx(days=week, recipes=r, targets=targets, taken={},
+                                       prefs={**DEFAULT_PREFS, "max_repeats": 2, "favourites": ["6"]}))
+        self.assertLessEqual(max(sum(x["recipe_id"] == i for x in capped) for i in range(1, 7)), 2)
+        rated = propose_week(self.ctx(days=week, recipes=r, targets=targets, taken={}, ratings={"5": 5.0}))
+        self.assertGreater(sum(x["recipe_id"] == 5 for x in rated), sum(x["recipe_id"] == 5 for x in plain))
+        left = propose_week(self.ctx(days=week, recipes=r, targets=targets, taken={}))
+        for d0, d1 in zip(week, week[1:]):
+            dinner = [x for x in left if x["date"] == d0 and x["meal"] == "dinner"][0]["recipe_id"]
+            lunch = [x for x in left if x["date"] == d1 and x["meal"] == "lunch"][0]
+            self.assertEqual(lunch["recipe_id"], dinner)
+            self.assertIn("leftovers", lunch["why"])
+        only = propose_week(self.ctx(days=week, recipes=r, targets=targets, taken={},
+                                     prefs={**DEFAULT_PREFS, "plan_meals": ["dinner"]}))
+        self.assertEqual({x["meal"] for x in only}, {"dinner"})
+        self.assertTrue(all(x["kcal"] <= 1000 for x in only))  # leaves room for meals Craig plans himself
+
+    def test_check_prefs(self):
+        p = check_prefs({"favourites": [1, "1", 2], "never": [2], "avoid": [" Mushroom ", "mushroom"],
+                         "plan_meals": ["dinner", "lunch"], "max_repeats": "2", "notes": " no fish on weekdays "})
+        self.assertEqual((p["favourites"], p["never"], p["avoid"], p["plan_meals"], p["max_repeats"], p["notes"]),
+                         (["1"], ["2"], ["mushroom"], ["lunch", "dinner"], 2, "no fish on weekdays"))
+        for bad in ({"plan_meals": []}, {"plan_meals": ["brunch"]}, {"max_repeats": 9}, {"avoid": ["x" * 41]},
+                    {"favourites": [True]}, {"notes": "x" * 1001}):
+            with self.assertRaises(ValueError, msg=bad):
+                check_prefs({"plan_meals": ["dinner"], **bad})
 
     def test_propose_and_apply(self):
         hl, mp = setup()
@@ -164,13 +202,24 @@ class Proposals(unittest.TestCase):
                   '{"date": "2026-10-10", "meal": "brunch", "recipe_id": 5, "portions": 1},'
                   '{"date": "2026-10-10", "meal": "dinner", "recipe_id": 6, "portions": 1}]}')
         fake = FakeMax(answer)
+        mp.strategy = Strategy(None, hl)
+        mp.strategy.save({"strategy": {"goal": "lose", "rate": 0.5, "style": "coached", "kcal": 2300, "diet": "balanced",
+                                       "gkg": 2.0, "fib": 30, "dist": "training", "train": ["Fri"], "shift": 200, "kg": 80}})
+        mp.set_prefs({"prefs": {"favourites": [5], "never": [2], "avoid": ["tikka"], "plan_meals": ["lunch", "dinner"],
+                                "notes": "No fish on weekdays"}})
         out = ask_max(mp, {}, FakeChat(fake))
         self.assertEqual([(x["recipe"], x["portions"]) for x in out["items"]],
                          [("Beef chilli", 1.5), ("Chicken and rice bowl", 1)])
         self.assertIn("3 suggestions", out["note"])
         self.assertIn("Overnight oats", fake.prompts[0])
         self.assertNotIn("Tuna sandwich", fake.prompts[0])  # no calories, so not offered
-        self.assertIn("2300 kcal", fake.prompts[0])  # NutriTrace goal when there's no strategy
+        prompt = fake.prompts[0]
+        for want in ("losing fat at 0.5%", "protein 2.0 g/kg", "2026-10-09 (training day)", "No fish on weekdays",
+                     "Fill lunch, dinner", "5: Chicken and rice bowl", "favourite", "Foods I avoid: tikka"):
+            self.assertIn(want, prompt)
+        self.assertNotIn("Salmon", prompt)  # never suggest
+        self.assertNotIn("Chicken tikka", prompt)  # avoided food
+        self.assertIn("Goal: losing fat at 0.5% a week", out["uses"])
         self.assertEqual(mp.view()["slots"], [])
         from sources import SourceError
         with self.assertRaises(SourceError):

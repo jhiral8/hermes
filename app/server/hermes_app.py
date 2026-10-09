@@ -618,6 +618,15 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     if out is None:
                         self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
                         return
+                elif what == "plan/prefs":
+                    if mealplan is None:
+                        self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
+                        return
+                    try:
+                        out = {"prefs": mealplan.prefs(), "recipes": mealplan.recipes(""), "ratings": mealplan.ratings()}
+                    except SourceError as e:
+                        self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                        return
                 elif what in ("plan", "recipes"):
                     if mealplan is None:
                         self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
@@ -712,7 +721,7 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         def _plan_post(self, user, kind, body):
             """Meal-plan changes. Logging adds the recipe to NutriTrace; cooked goes to CookTrace's diary."""
             fn = {"add": "add", "change": "change", "log": "log_meal", "cooked": "cooked",
-                  "propose": "propose", "apply": "apply", "ask-max": "ask-max"}.get(kind)
+                  "propose": "propose", "apply": "apply", "ask-max": "ask-max", "prefs": "set_prefs"}.get(kind)
             if fn is None:
                 return None
             if mealplan is None:

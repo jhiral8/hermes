@@ -29,6 +29,7 @@ class MealPlan:
     def __init__(self, path, health, hlog, strategy=None):
         self.strategy = strategy  # day targets, when a strategy is set
         self.path = Path(path) if path else None
+        self._prefs = None
         self.h = health
         self.log = hlog
         self._lock = threading.Lock()
@@ -207,22 +208,57 @@ class MealPlan:
 
     def propose(self, body):
         """The app planner's suggestion for the rest of a week. Nothing is saved."""
-        v = self.view(body.get("week"))
-        days = [d for d in v["week"] if d >= v["today"]]
-        if not days:
-            raise ValueError("That week is over. Pick this week or a later one.")
-        targets = self._targets(days)
-        if not targets:
-            raise ValueError("Set a Strategy (or a calorie goal in NutriTrace) first, so there's a target to plan to.")
-        taken = {}
-        for s in v["slots"]:
-            t = taken.setdefault(s["date"], {"meals": set(), "kcal": 0})
-            t["meals"].add(s["meal"])
-            if s["status"] != "skipped":
-                t["kcal"] += ((s.get("per_serving") or {}).get("kcal") or 0) * s["portions"]
-        items = propose_week(days, self.recipes(""), targets, taken)
-        return {"week": v["week"], "items": items, "source": "app",
-                "targets": {d: targets[d]["kcal"] for d in targets}}
+        ctx = plan_context(self, body)
+        return {"week": ctx["week"], "items": propose_week(ctx), "source": "app", "targets": ctx["kcal_targets"],
+                "uses": ctx["uses"]}
+
+    # ------------------------------------------------------------ preferences
+
+    def _prefs_path(self):
+        return self.path.with_name("meal-prefs.json") if self.path else None
+
+    def prefs(self):
+        with self._lock:
+            if self._prefs is None:
+                p = self._prefs_path()
+                try:
+                    self._prefs = ({**DEFAULT_PREFS, **json.loads(p.read_text(encoding="utf-8"))}
+                                   if p and p.exists() else copy.deepcopy(DEFAULT_PREFS))
+                except (OSError, ValueError):
+                    raise SourceError("The meal preferences file can't be read.")
+            return copy.deepcopy(self._prefs)
+
+    def set_prefs(self, body):
+        clean = check_prefs(body.get("prefs"))
+        self.prefs()
+        with self._lock:
+            before = self._prefs
+            self._prefs = clean
+            p = self._prefs_path()
+            if p:
+                try:
+                    tmp = p.with_name(p.name + ".tmp")
+                    tmp.write_text(json.dumps(clean, indent=1), encoding="utf-8")
+                    tmp.chmod(0o640)
+                    tmp.replace(p)
+                except OSError:
+                    self._prefs = before
+                    raise SourceError("The meal preferences couldn't be saved on the server.")
+        return {"prefs": clean}
+
+    def ratings(self):
+        """Craig's CookTrace ratings over the last six months: recipe id -> average stars."""
+        today = self.h.today()
+        try:
+            items = (self._ct().get("/cook-diary", ttl=600, date_from=(today - datetime.timedelta(days=183)).isoformat(),
+                                    date_to=today.isoformat(), kind="cooked", limit=500) or {}).get("items") or []
+        except SourceError:
+            return {}
+        stars = {}
+        for x in items:
+            if x.get("rating") and x.get("recipe_id") is not None:
+                stars.setdefault(str(x["recipe_id"]), []).append(float(x["rating"]))
+        return {k: round(sum(v) / len(v), 1) for k, v in stars.items()}
 
     def apply(self, body):
         """Add an accepted proposal, one planned meal per item."""
@@ -270,62 +306,175 @@ class MealPlan:
 
 MEAL_SHARE = {"breakfast": 0.25, "lunch": 0.35, "dinner": 0.40}  # snacks are left to Craig
 PORTIONS = (0.5, 1, 1.5, 2, 2.5, 3)
+MAX_APPLY = 28
 BREAKFAST_WORDS = ("oat", "porridge", "granola", "muesli", "egg", "omelette", "yoghurt", "yogurt", "pancake",
                    "toast", "smoothie", "breakfast", "bagel", "waffle", "chia", "skyr", "cereal")
+DEFAULT_PREFS = {"favourites": [], "never": [], "avoid": [], "plan_meals": ["breakfast", "lunch", "dinner"],
+                 "leftovers": True, "max_repeats": 3, "notes": ""}
+GOAL_WORDS = {"lose": "losing fat", "maintain": "maintaining weight", "gain": "building (lean gain)"}
 
 
 def breakfast_like(name):
     n = (name or "").lower()
     return any(w in n for w in BREAKFAST_WORDS)
-MAX_APPLY = 28
 
 
-def propose_week(days, recipes, targets, taken):
-    """Fill the empty breakfast, lunch and dinner slots from recipes.
+def check_prefs(body):
+    """Meal preferences as set on the Meal plan screen. Raises ValueError on bad input."""
+    if not isinstance(body, dict):
+        raise ValueError("prefs must be an object.")
 
-    days: ISO dates to fill. recipes: per-serving recipes with kcal.
-    targets: {date: {"kcal", "protein"}}. taken: {date: {"meals": set, "kcal": float}} already planned.
+    def ids(key):
+        v = body.get(key) or []
+        if not isinstance(v, list) or len(v) > 200 or any(isinstance(x, bool) or not isinstance(x, (int, str)) or len(str(x)) > 40 for x in v):
+            raise ValueError(f"{key} must be a list of recipe ids.")
+        return list(dict.fromkeys(str(x) for x in v))
+
+    avoid = body.get("avoid") or []
+    if not isinstance(avoid, list) or len(avoid) > 50 or any(not isinstance(x, str) or not x.strip() or len(x) > 40 for x in avoid):
+        raise ValueError("avoid must be a list of up to 50 foods.")
+    meals = body.get("plan_meals") or []
+    if not isinstance(meals, list) or any(m not in MEAL_SHARE for m in meals) or not meals:
+        raise ValueError("Plan at least one of breakfast, lunch and dinner.")
+    try:
+        reps = int(body.get("max_repeats", 3))
+    except (TypeError, ValueError):
+        raise ValueError("max_repeats must be a number.")
+    if not 1 <= reps <= 7:
+        raise ValueError("max_repeats must be between 1 and 7.")
+    notes = body.get("notes") or ""
+    if not isinstance(notes, str) or len(notes) > 1000:
+        raise ValueError("notes must be text of up to 1000 characters.")
+    fav, never = ids("favourites"), ids("never")
+    return {"favourites": [x for x in fav if x not in never], "never": never,
+            "avoid": list(dict.fromkeys(x.strip().lower() for x in avoid)), "plan_meals": [m for m in MEAL_SHARE if m in meals],
+            "leftovers": bool(body.get("leftovers", True)), "max_repeats": reps, "notes": notes.strip()}
+
+
+def plan_context(plan, body):
+    """Everything a proposal needs: open days and meals, day targets, the
+    Strategy goal and training days, recipes allowed by the preferences, and
+    Craig's CookTrace ratings. Shared by the app planner and Ask Max."""
+    v = plan.view(body.get("week"))
+    days = [d for d in v["week"] if d >= v["today"]]
+    if not days:
+        raise ValueError("That week is over. Pick this week or a later one.")
+    targets = plan._targets(days)
+    if not targets:
+        raise ValueError("Set a Strategy (or a calorie goal in NutriTrace) first, so there's a target to plan to.")
+    prefs = plan.prefs()
+    never, avoid = set(prefs["never"]), prefs["avoid"]
+    all_recipes = [r for r in plan.recipes("") if r.get("kcal")]
+    recipes = [r for r in all_recipes if str(r["id"]) not in never and not any(w in r["name"].lower() for w in avoid)]
+    if not recipes:
+        raise ValueError("None of your CookTrace recipes has calories yet (or your preferences rule them all out), so there's nothing to plan from.")
+    ratings = plan.ratings()
+    taken, rows = {}, []
+    for s in v["slots"]:
+        t = taken.setdefault(s["date"], {"meals": set(), "kcal": 0, "dinner": None})
+        t["meals"].add(s["meal"])
+        if s["status"] != "skipped":
+            t["kcal"] += ((s.get("per_serving") or {}).get("kcal") or 0) * s["portions"]
+            if s["meal"] == "dinner":
+                t["dinner"] = str(s["recipe_id"])
+        rows.append(f"{s['date']} {s['meal']}: {s['recipe']} x{s['portions']}")
+    strat = None
+    if plan.strategy:
+        try:
+            strat = plan.strategy.view().get("strategy")
+        except SourceError:
+            strat = None
+    training = set(strat["train"]) if strat and strat.get("dist") == "training" else set()
+    weekday = lambda d: ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[datetime.date.fromisoformat(d).weekday()]
+    est = None
+    try:
+        est = plan.h.estimate()
+    except SourceError:
+        pass
+    uses = []
+    if strat:
+        uses.append(f"Goal: {GOAL_WORDS[strat['goal']]}" + (f" at {strat['rate']}% a week" if strat["goal"] != "maintain" else ""))
+        uses.append(f"Protein {strat['gkg']} g per kg")
+    if training:
+        uses.append("Training days: " + ", ".join(d for d in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun") if d in training))
+    if prefs["favourites"]:
+        uses.append(f"{len(prefs['favourites'])} favourite{'s' if len(prefs['favourites']) > 1 else ''}")
+    if ratings:
+        uses.append("Your CookTrace ratings")
+    if never or avoid:
+        uses.append("Avoiding " + ", ".join(([f"{len(never)} recipe{'s' if len(never) > 1 else ''}"] if never else []) + avoid[:5]))
+    if prefs["plan_meals"] != list(MEAL_SHARE):
+        uses.append("Planning " + ", ".join(prefs["plan_meals"]) + " only")
+    if prefs["leftovers"]:
+        uses.append("Leftovers for lunch")
+    return {"week": v["week"], "days": days, "targets": targets, "kcal_targets": {d: targets[d]["kcal"] for d in targets},
+            "recipes": recipes, "ratings": ratings, "prefs": prefs, "taken": taken, "rows": rows, "strategy": strat,
+            "training": {d for d in days if weekday(d) in training}, "estimate": est, "uses": uses}
+
+
+def propose_week(ctx):
+    """Fill the open slots from the allowed recipes.
+
     For each slot, pick the recipe and portion closest to that meal's share of
-    the day's calories, short of protein counting against it, and repeats
-    (in the day or the week) discouraged. No model involved; same input, same plan.
+    the day's calories. Protein short of the share counts against a choice
+    (more so when losing fat), favourites and well-rated recipes count for it,
+    repeats beyond the weekly limit are ruled out, and with leftovers on, the
+    previous night's dinner is preferred for lunch. No model involved; same
+    input, same plan.
     """
-    usable = [r for r in recipes if r.get("kcal")]
-    if not usable:
-        raise ValueError("None of your CookTrace recipes has calories yet, so there's nothing to plan from.")
-    week_uses, out = {}, []
-    for d in days:
-        t = targets.get(d) or {}
+    recipes, prefs, ratings = ctx["recipes"], ctx["prefs"], ctx["ratings"]
+    fav = set(prefs["favourites"])
+    strat = ctx.get("strategy") or {}
+    pweight = 0.8 if strat.get("goal") == "lose" else 0.5
+    week_uses, out, last_dinner = {}, [], None
+    for d in ctx["days"]:
+        t = ctx["targets"].get(d) or {}
+        have = ctx["taken"].get(d) or {"meals": set(), "kcal": 0, "dinner": None}
         if not t.get("kcal"):
+            last_dinner = have.get("dinner")
             continue
-        have = taken.get(d) or {"meals": set(), "kcal": 0}
-        empty = [m for m in MEAL_SHARE if m not in have["meals"]]
-        if not empty:
-            continue
-        left = max(0, t["kcal"] - have["kcal"])
-        share_sum = sum(MEAL_SHARE[m] for m in empty)
+        empty = [m for m in prefs["plan_meals"] if m not in have["meals"]]
+        planned_shares = sum(MEAL_SHARE[m] for m in MEAL_SHARE if m not in prefs["plan_meals"])
+        left = max(0, t["kcal"] - have["kcal"]) * (1 - planned_shares)  # leave room for meals Craig plans himself
+        share_sum = sum(MEAL_SHARE[m] for m in empty) or 1
         today_used = set()
+        dinner_today = have.get("dinner")
         for m in empty:
             goal = left * MEAL_SHARE[m] / share_sum
             pgoal = (t.get("protein") or 0) * MEAL_SHARE[m]
+            fits = [r for r in recipes if breakfast_like(r["name"]) == (m == "breakfast")] or recipes
+            fits = [r for r in fits if week_uses.get(str(r["id"]), 0) < prefs["max_repeats"]] or fits
             best = None
-            # Breakfast picks breakfast-style recipes, and the other meals avoid them,
-            # unless the recipes don't allow it.
-            fits = [r for r in usable if breakfast_like(r["name"]) == (m == "breakfast")] or usable
             for r in fits:
+                rid = str(r["id"])
                 for p in PORTIONS:
                     kcal = r["kcal"] * p
                     score = abs(kcal - goal) / max(goal, 1)
                     if pgoal and r.get("protein") is not None:
-                        score += 0.5 * max(0, pgoal - r["protein"] * p) / pgoal
-                    score += 0.35 * week_uses.get(r["id"], 0) + (1.0 if r["id"] in today_used else 0)
+                        score += pweight * max(0, pgoal - r["protein"] * p) / pgoal
+                    score += 0.35 * week_uses.get(rid, 0) + (1.0 if rid in today_used else 0)
+                    score -= 0.25 if rid in fav else 0
+                    if rid in ratings:
+                        score -= 0.1 * (ratings[rid] - 3)
+                    if prefs["leftovers"] and m == "lunch" and rid == last_dinner:
+                        score -= 0.6  # last night's leftovers
                     score += 0.02 * abs(p - 1)  # prefer a plain single portion when it's as good
                     if best is None or score < best[0]:
                         best = (score, r, p)
             _, r, p = best
-            week_uses[r["id"]] = week_uses.get(r["id"], 0) + 1
-            today_used.add(r["id"])
-            out.append({"date": d, "meal": m, "recipe_id": r["id"], "recipe": r["name"], "portions": p,
-                        "kcal": round(r["kcal"] * p), "protein": round((r.get("protein") or 0) * p)})
+            rid = str(r["id"])
+            week_uses[rid] = week_uses.get(rid, 0) + 1
+            today_used.add(rid)
+            if m == "dinner":
+                dinner_today = rid
+            item = {"date": d, "meal": m, "recipe_id": r["id"], "recipe": r["name"], "portions": p,
+                    "kcal": round(r["kcal"] * p), "protein": round((r.get("protein") or 0) * p)}
+            why = [w for w, ok in (("favourite", rid in fav), ("leftovers", prefs["leftovers"] and m == "lunch" and rid == last_dinner),
+                                   (f"rated {ratings.get(rid)}★", ratings.get(rid, 0) >= 4), ("training day", d in ctx["training"] and m == "dinner")) if ok]
+            if why:
+                item["why"] = ", ".join(why)
+            out.append(item)
+        last_dinner = dinner_today
     return out
 
 
@@ -344,81 +493,76 @@ def _parse_plan(text):
     return None
 
 
-def max_prompt(days, recipes, targets, taken_rows, extra):
+def max_prompt(ctx):
+    p, strat, est = ctx["prefs"], ctx.get("strategy"), ctx.get("estimate")
+    meals = ", ".join(p["plan_meals"])
     lines = [
         "Plan my meals. This request comes from the Hermes app's Meal plan screen.",
-        "Use only the recipes listed (by id). Fill breakfast, lunch and dinner on the days listed, skipping meals already planned.",
-        "Aim for each day's calorie target and get protein close to it. Vary recipes; leftovers on a following day are fine.",
+        f"Use only the recipes listed (by id). Fill {meals} on the days listed, skipping meals already planned.",
+        "Fit my fitness goal: hit each day's calorie target, get protein close to it, and put the bigger, carb-heavier meals on training days.",
+        "Follow my preferences below. Use favourites and well-rated recipes more often.",
+        f"Use any one recipe at most {p['max_repeats']} times this week."
+        + (" Leftovers are fine: last night's dinner can be the next day's lunch." if p["leftovers"] else " Don't use leftovers for lunch."),
         "Portions are servings of the recipe, from 0.5 to 3 in steps of 0.5.",
         "Don't use any tools and don't change anything: the app shows your plan to me and I accept it there.",
-        "Answer with one short sentence of reasoning, then a JSON object exactly like:",
+        "Answer with one or two short sentences on how the plan fits my goal, then a JSON object exactly like:",
         '{"note": "...", "items": [{"date": "YYYY-MM-DD", "meal": "breakfast|lunch|dinner", "recipe_id": 1, "portions": 1}]}',
         "",
-        "Days and targets (kcal, protein g): " + "; ".join(f"{d}: {targets[d]['kcal']:.0f} kcal, {targets[d].get('protein') or '?'} g" for d in days if d in targets),
-        "Already planned: " + ("; ".join(taken_rows) if taken_rows else "nothing"),
-        "Recipes (id, name, per serving kcal/protein/carbs/fat, makes servings):",
     ]
-    for r in recipes:
-        lines.append(f"- {r['id']}: {r['name']} | {r['kcal']:.0f} kcal, P {r.get('protein') or 0:.0f}, C {r.get('carbs') or 0:.0f}, F {r.get('fat') or 0:.0f} | makes {r.get('servings') or '?'}")
-    if extra:
-        lines += ["", "Context: " + extra]
+    if strat:
+        lines.append(f"Goal: {GOAL_WORDS[strat['goal']]}" + (f" at {strat['rate']}% of body weight a week" if strat["goal"] != "maintain" else "")
+                     + f"; protein {strat['gkg']} g/kg; diet style {strat['diet']}; fibre {strat['fib']} g a day.")
+    if est:
+        lines.append(f"Body: expenditure {est.get('expenditure')} kcal/day, trend weight {est.get('trend_kg')} kg, changing {est.get('weekly_change_kg')} kg a week.")
+    lines.append("Days and targets: " + "; ".join(
+        f"{d}{' (training day)' if d in ctx['training'] else ''}: {ctx['targets'][d]['kcal']:.0f} kcal, protein {ctx['targets'][d].get('protein') or '?'} g"
+        for d in ctx["days"] if d in ctx["targets"]))
+    lines.append("Already planned: " + ("; ".join(ctx["rows"]) if ctx["rows"] else "nothing"))
+    if p["avoid"]:
+        lines.append("Foods I avoid: " + ", ".join(p["avoid"]) + ".")
+    if p["notes"]:
+        lines.append("My notes on how I like to eat: " + p["notes"])
+    fav = set(p["favourites"])
+    lines.append("Recipes (id, name, per serving kcal/protein/carbs/fat, makes servings, my rating, favourite):")
+    for r in ctx["recipes"]:
+        rid = str(r["id"])
+        tags = ([f"rated {ctx['ratings'][rid]}/5"] if rid in ctx["ratings"] else []) + (["favourite"] if rid in fav else [])
+        lines.append(f"- {r['id']}: {r['name']} | {r['kcal']:.0f} kcal, P {r.get('protein') or 0:.0f}, C {r.get('carbs') or 0:.0f}, "
+                     f"F {r.get('fat') or 0:.0f} | makes {r.get('servings') or '?'}" + (" | " + ", ".join(tags) if tags else ""))
     return "\n".join(lines)
 
 
 def ask_max(plan, body, chat):
-    """Max's proposal for the rest of a week. Max gets the recipes, targets and
-    what's planned (Craig allowed Max his health and food data on 2026-10-09).
-    Nothing is saved: the app shows the proposal and Craig accepts it."""
+    """Max's proposal for the rest of a week. Max gets the recipes, targets,
+    goal, training days, preferences, ratings and what's planned (Craig allowed
+    Max his health and food data on 2026-10-09). Nothing is saved: the app
+    shows the proposal and Craig accepts it."""
     if chat is None:
         raise SourceError("Max isn't connected to the app yet.")
     chat._check_kill()
-    v = plan.view(body.get("week"))
-    days = [d for d in v["week"] if d >= v["today"]]
-    if not days:
-        raise ValueError("That week is over. Pick this week or a later one.")
-    targets = plan._targets(days)
-    if not targets:
-        raise ValueError("Set a Strategy (or a calorie goal in NutriTrace) first, so there's a target to plan to.")
-    recipes = [r for r in plan.recipes("") if r.get("kcal")]
-    if not recipes:
-        raise ValueError("None of your CookTrace recipes has calories yet, so there's nothing to plan from.")
-    taken, rows = {}, []
-    for s in v["slots"]:
-        t = taken.setdefault(s["date"], {"meals": set(), "kcal": 0})
-        t["meals"].add(s["meal"])
-        if s["status"] != "skipped":
-            t["kcal"] += ((s.get("per_serving") or {}).get("kcal") or 0) * s["portions"]
-        rows.append(f"{s['date']} {s['meal']}: {s['recipe']} x{s['portions']}")
-    extra = ""
-    try:
-        est = plan.h.estimate()
-        extra = f"expenditure {est['expenditure']} kcal/day, trend weight {est.get('trend_kg')} kg, {est.get('weekly_change_kg')} kg/week"
-    except (SourceError, KeyError, TypeError):
-        pass
+    ctx = plan_context(plan, body)
+    base = {"week": ctx["week"], "source": "max", "targets": ctx["kcal_targets"], "uses": ctx["uses"]}
     if getattr(chat.backend, "sample", False):
         # Sample-data mode has no real Max: a labelled stand-in built the app's way.
-        items = propose_week(days, list(reversed(recipes)), targets, taken)
-        return {"week": v["week"], "items": items, "source": "max", "sample": True,
-                "targets": {d: targets[d]["kcal"] for d in targets},
+        alt = dict(ctx, recipes=list(reversed(ctx["recipes"])))
+        return {**base, "items": propose_week(alt), "sample": True,
                 "note": "Sample data: this stands in for Max's plan. On the server Max writes it."}
-    text = max_prompt(days, recipes, targets, rows, extra)
-    cid = "meal-plan-" + secrets.token_hex(4)
     answer = []
-    for ev in chat.backend.events(chat.backend.open(cid, text)):
+    for ev in chat.backend.events(chat.backend.open("meal-plan-" + secrets.token_hex(4), max_prompt(ctx))):
         if ev["type"] == "text":
             answer.append(ev["delta"])
         elif ev["type"] == "error":
             raise SourceError("Max: " + ev["message"])
-    full = "".join(answer)
-    got = _parse_plan(full)
+    got = _parse_plan("".join(answer))
     if not got:
         raise SourceError("Max didn't send a plan the app could read. Try again.")
-    ids = {str(r["id"]): r for r in recipes}
+    ids = {str(r["id"]): r for r in ctx["recipes"]}
     items, dropped = [], 0
     for it in got["items"][:MAX_APPLY]:
         r = ids.get(str(it.get("recipe_id"))) if isinstance(it, dict) else None
-        ok = (r and it.get("date") in days and it.get("meal") in MEAL_SHARE
-              and it["meal"] not in (taken.get(it["date"]) or {"meals": set()})["meals"])
+        ok = (r and it.get("date") in ctx["days"] and it.get("meal") in ctx["prefs"]["plan_meals"]
+              and it["meal"] not in (ctx["taken"].get(it["date"]) or {"meals": set()})["meals"]
+              and (it["date"], it["meal"]) not in {(x["date"], x["meal"]) for x in items})
         try:
             p = round(float(it.get("portions", 1)) * 2) / 2
         except (TypeError, ValueError):
@@ -434,5 +578,4 @@ def ask_max(plan, body, chat):
     if dropped:
         note = (note + f" ({dropped} suggestion{'s' if dropped > 1 else ''} didn't fit and were left out.)").strip()
     items.sort(key=lambda x: (x["date"], MEAL_INDEX[x["meal"]]))
-    return {"week": v["week"], "items": items, "source": "max", "note": note,
-            "targets": {d: targets[d]["kcal"] for d in targets}}
+    return {**base, "items": items, "note": note}

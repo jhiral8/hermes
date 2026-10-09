@@ -2137,7 +2137,7 @@ async function screenMealPlan(week) {
   const planned = v.slots.filter((s) => s.status !== "skipped");
   const kcal = planned.reduce((a, s) => a + (s.per_serving && s.per_serving.kcal ? s.per_serving.kcal * s.portions : 0), 0);
   const future = v.week[6] >= v.today;
-  return healthHead("meals", "Meals & Shop", `${future ? `<button type="button" class="btn" data-act="propOpen" data-arg="app">Propose a week</button><button type="button" class="btn" data-act="propOpen" data-arg="max">${ic("max", 16)}Ask Max</button>` : ""}<button type="button" class="btn primary" data-act="slotNew" data-arg="${v.today >= v.week[0] && v.today <= v.week[6] ? v.today : v.week[0]}|dinner">${ic("plus", 16)}Plan a meal</button>`,
+  return healthHead("meals", "Meals & Shop", `${future ? `<button type="button" class="btn ghost" data-act="prefsOpen">Preferences</button><button type="button" class="btn" data-act="propOpen" data-arg="app">Propose a week</button><button type="button" class="btn" data-act="propOpen" data-arg="max">${ic("max", 16)}Ask Max</button>` : ""}<button type="button" class="btn primary" data-act="slotNew" data-arg="${v.today >= v.week[0] && v.today <= v.week[6] ? v.today : v.week[0]}|dinner">${ic("plus", 16)}Plan a meal</button>`,
       "Plan meals from your CookTrace recipes. A planned meal counts once you log it.") + mealsSub("meals") + `<div class="stack s16">
     <div class="row-flex" style="flex-wrap:wrap;gap:12px"><div class="btns" style="gap:4px">
       <a class="iconbtn" href="#health/meals/plan/${v.prev}" aria-label="Previous week">${ic("back")}</a>
@@ -2206,17 +2206,67 @@ function drawProposal() {
   const label = (m) => (PLAN_MEALS.find(([k]) => k === m) || [, m])[1];
   const n = p.keep.filter(Boolean).length;
   const body = `${p.note ? `<div class="notice info" role="status">${ic("info")}<div>${esc(p.note)}</div></div>` : ""}
+    ${p.uses && p.uses.length ? `<div class="chips" style="margin-top:10px" aria-label="What the plan follows">${p.uses.map((u) => `<span class="chip">${esc(u)}</span>`).join("")}</div>` : ""}
+    <p class="xs muted" style="margin-top:8px">Change what it follows in <button type="button" class="link" data-act="prefsOpen">Meal preferences</button> or <a class="link" href="#health/strategy">Strategy</a>.</p>
     <p class="small muted" style="margin:10px 0">${p.source === "max" ? "Max's" : "The app's"} suggestion for the open meals. Untick anything you don't want.</p>
     <div class="stack s16">${Object.keys(byDay).map((d) => {
       const rows = byDay[d], kcal = rows.reduce((a, [x, i]) => a + (p.keep[i] ? x.kcal : 0), 0);
       return `<div><div class="row-flex" style="justify-content:space-between"><b class="small">${esc(dayName(d))}</b><span class="xs muted">${fmtN(kcal)} kcal added${p.targets && p.targets[d] ? ` · target ${fmtN(p.targets[d])}` : ""}</span></div>
-        <div class="list">${rows.map(([x, i]) => `<label class="li" style="cursor:pointer"><input type="checkbox" data-prop="${i}"${p.keep[i] ? " checked" : ""} style="margin-right:10px"><span class="main"><span class="t">${esc(label(x.meal))}: ${esc(x.recipe)}</span><span class="s">${x.portions} portion${x.portions === 1 ? "" : "s"} · ${fmtN(x.kcal)} kcal · P ${fmtN(x.protein)} g</span></span></label>`).join("")}</div></div>`;
+        <div class="list">${rows.map(([x, i]) => `<label class="li" style="cursor:pointer"><input type="checkbox" data-prop="${i}"${p.keep[i] ? " checked" : ""} style="margin-right:10px"><span class="main"><span class="t">${esc(label(x.meal))}: ${esc(x.recipe)}</span><span class="s">${x.portions} portion${x.portions === 1 ? "" : "s"} · ${fmtN(x.kcal)} kcal · P ${fmtN(x.protein)} g${x.why ? ` · ${esc(x.why)}` : ""}</span></span></label>`).join("")}</div></div>`;
     }).join("")}</div>`;
   modal(p.source === "max" ? "Max's plan" : "Proposed week", body,
     `<button type="button" class="btn ghost" data-act="close">Not now</button><button type="button" class="btn primary" data-act="propApply"${n ? "" : " disabled"}>Add ${n} meal${n === 1 ? "" : "s"} to the plan</button>`);
 }
 document.addEventListener("change", (e) => {
   if (e.target.dataset && e.target.dataset.prop != null && S.prop) { S.prop.keep[Number(e.target.dataset.prop)] = e.target.checked; drawProposal(); }
+});
+
+// Meal preferences: what proposals (the app's and Max's) follow.
+async function openPrefs() {
+  modal("Meal preferences", `<p class="small muted">Loading…</p>`, `<button type="button" class="btn ghost" data-act="close">Cancel</button>`);
+  try {
+    const d = await api("/api/health/plan/prefs");
+    S.prefs = { ...d.prefs, recipes: d.recipes || [], ratings: d.ratings || {} };
+    drawPrefs();
+  } catch (e) { modal("Meal preferences", notConnected("CookTrace", e.message), `<button type="button" class="btn" data-act="close">Close</button>`); }
+}
+function readPrefs() {
+  const p = S.prefs;
+  const av = $("#mp-avoid"); if (av) p.avoid = av.value.split(",").map((x) => x.trim()).filter(Boolean);
+  const n = $("#mp-notes"); if (n) p.notes = n.value;
+  const r = $("#mp-rep"); if (r) p.max_repeats = Number(r.value);
+  const l = $("#mp-left"); if (l) p.leftovers = l.checked;
+}
+function drawPrefs() {
+  const p = S.prefs, fav = new Set(p.favourites), never = new Set(p.never);
+  const rows = p.recipes.map((r) => {
+    const id = String(r.id), st = p.ratings[id];
+    return `<div class="li"><span class="main"><span class="t">${esc(r.name)}</span><span class="s">${r.kcal ? fmtN(r.kcal) + " kcal a serving" : "No calories yet"}${st ? ` · you rated it ${st}★` : ""}</span></span>
+      <span class="end btns" style="gap:4px"><button type="button" class="chip" aria-pressed="${fav.has(id)}" data-act="prefFav" data-arg="${esc(id)}">Favourite</button><button type="button" class="chip" aria-pressed="${never.has(id)}" data-act="prefNever" data-arg="${esc(id)}">Never</button></span></div>`;
+  }).join("");
+  modal("Meal preferences", `<p class="small muted" style="margin-bottom:12px">Proposals from the app and from Max follow these, together with your <a class="link" href="#health/strategy">Strategy</a> goal, protein and training days, and your CookTrace ratings.</p>
+    <div class="form-grid">
+      <div class="field full"><span class="lab">Meals to plan</span><div class="chips">${[["breakfast", "Breakfast"], ["lunch", "Lunch"], ["dinner", "Dinner"]].map(([k, l]) => `<button type="button" class="chip" aria-pressed="${p.plan_meals.includes(k)}" data-act="prefMeal" data-arg="${k}">${l}</button>`).join("")}</div></div>
+      <div class="field full"><label for="mp-avoid">Foods to avoid</label><input class="inp" id="mp-avoid" placeholder="For example: mushroom, prawns" value="${esc(p.avoid.join(", "))}"><span class="hint">Recipes with these words in their name are left out.</span></div>
+      <div class="field"><label for="mp-rep">Same recipe at most</label><select class="inp" id="mp-rep">${[1, 2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}"${n === p.max_repeats ? " selected" : ""}>${n} time${n > 1 ? "s" : ""} a week</option>`).join("")}</select></div>
+      <div class="field"><label class="row-flex" style="gap:8px;align-items:center;margin-top:26px"><input type="checkbox" id="mp-left"${p.leftovers ? " checked" : ""}>Last night's dinner for lunch</label></div>
+      <div class="field full"><label for="mp-notes">Anything else (for Max)</label><textarea class="inp" id="mp-notes" rows="3" maxlength="1000" placeholder="For example: high-protein breakfasts, no fish on weekdays, quick lunches">${esc(p.notes)}</textarea></div>
+      <div class="field full"><span class="lab">Recipes</span>${p.recipes.length ? `<div class="list" style="max-height:300px;overflow:auto">${rows}</div>` : `<p class="small muted">No recipes in CookTrace yet.</p>`}</div>
+    </div>`, `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="prefSave">Save preferences</button>`);
+}
+
+Object.assign(STRAT_ACTS, {
+  prefsOpen: () => openPrefs(),
+  prefFav: (id) => { readPrefs(); const p = S.prefs; p.favourites = p.favourites.includes(id) ? p.favourites.filter((x) => x !== id) : [...p.favourites, id]; p.never = p.never.filter((x) => x !== id); drawPrefs(); },
+  prefNever: (id) => { readPrefs(); const p = S.prefs; p.never = p.never.includes(id) ? p.never.filter((x) => x !== id) : [...p.never, id]; p.favourites = p.favourites.filter((x) => x !== id); drawPrefs(); },
+  prefMeal: (m) => { readPrefs(); const p = S.prefs; p.plan_meals = p.plan_meals.includes(m) ? p.plan_meals.filter((x) => x !== m) : [...p.plan_meals, m]; drawPrefs(); },
+  prefSave: async (_, el, busy) => {
+    readPrefs();
+    const { favourites, never, avoid, plan_meals, leftovers, max_repeats, notes } = S.prefs;
+    if (!plan_meals.length) return toast("Pick at least one meal to plan.");
+    busy(true);
+    try { await api("/api/health/plan/prefs", { body: { prefs: { favourites, never, avoid, plan_meals, leftovers, max_repeats, notes } } }); closeModal(); toast("Meal preferences saved."); } finally { busy(false); }
+  },
 });
 
 Object.assign(STRAT_ACTS, {
