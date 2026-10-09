@@ -51,3 +51,5 @@ a.spark-card { text-decoration: none; color: inherit; }
 .lib-file .art-doc,.lib-file .art-code,.lib-file .art-svg{padding:20px;margin:0}
 .panel.skill p.small{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .panel hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}
+.search-btn span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.search-btn kbd{white-space:nowrap;flex:none}

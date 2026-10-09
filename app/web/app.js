@@ -130,13 +130,14 @@ function renderShell(route) {
   const me = S.me || {};
   $("#side").innerHTML = `
     <div class="brand">${logoMark()}<b>Hermes</b><span>Personal</span></div>
+    <button type="button" class="search-btn" data-act="palette" aria-label="Search or jump to">${ic("search", 15)}<span>Search or jump to…</span><kbd>${IS_MAC ? "⌘" : "Ctrl "}K</kbd></button>
     <nav class="nav" aria-label="Primary">${NAV.map((x) => {
       if (x.label) return `<div class="nav-label">${esc(x.label)}</div>`;
       const cur = x.h.split("/")[0] === area;
       return `<a href="#${x.h}"${cur ? ' aria-current="page"' : ""}${x.soon ? ' class="soon"' : ""}>${ic(x.i)}<span>${esc(x.t)}</span>${
         x.count && n ? `<span class="count" aria-label="${n} pending">${n}</span>` : ""}${x.soon ? `<span class="soon-tag">Phase ${x.soon}</span>` : ""}</a>`;
     }).join("")}</nav>
-    <div class="side-foot"><div class="acct"><span class="avatar">${esc(initials(me.name || "Craig"))}</span><span class="who"><b style="display:block;font-size:13.5px;font-weight:600">${esc((me.name || "Craig").split(" ")[0])}</b><span class="xs muted">Owner · ${esc(me.login || "signed in through Tailscale")}</span></span></div></div>`;
+    <div class="side-foot"><button type="button" class="acct" data-act="acctMenu" aria-haspopup="menu"><span class="avatar">${esc(initials(me.name || "Craig"))}</span><span class="who"><b style="display:block;font-size:13.5px;font-weight:600">${esc((me.name || "Craig").split(" ")[0])}</b><span class="xs muted">Owner · ${esc(me.login || "signed in through Tailscale")}</span></span></button></div>`;
 
   const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", planner: "Planner", library: "Library", more: "More", soon: "Coming next" }[area] || "Hermes";
   $("#top").innerHTML = `
@@ -147,6 +148,8 @@ function renderShell(route) {
       ${S.offline ? `<span class="demo-pill offline-pill"><i></i>Offline</span>` : ""}
       ${area === "max" && S.me && S.me.chat_ready !== false ? `<button type="button" class="btn sm chat-btn" data-act="newChat" title="New chat">${ic("chat")}<span class="lbl">New chat</span></button>` : ""}
       <button type="button" class="btn primary sm cap-btn" data-act="createTask" title="Create a task for an agent">${ic("plus")}<span class="lbl">New task</span></button>
+      <button type="button" class="iconbtn phone-only" data-act="palette" aria-label="Search">${ic("search", 18)}</button>
+      <button type="button" class="iconbtn phone-only" data-act="acctMenu" aria-label="Account and appearance"><span class="avatar" style="width:30px;height:30px;font-size:12px">${esc(initials(me.name || "Craig"))}</span></button>
     </div>`;
 
   $("#bnav").innerHTML = `
@@ -896,6 +899,97 @@ async function chatSend() {
   chatScroll();
 }
 
+/* ---------- appearance, account menu and search ---------- */
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+function getTheme() { try { return localStorage.getItem("hermes-theme") || "system"; } catch (_) { return "system"; } }
+function setTheme(t) {
+  try { if (t === "system") localStorage.removeItem("hermes-theme"); else localStorage.setItem("hermes-theme", t); } catch (_) { /* private mode */ }
+  if (t === "system") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+}
+
+function openAcctMenu() {
+  const me = S.me || {};
+  const t = getTheme();
+  const opt = (v, icon, label) => `<button type="button" role="menuitemradio" aria-checked="${t === v}" data-act="theme" data-arg="${v}">${ic(icon)}${label}${t === v ? '<span style="margin-left:auto">✓</span>' : ""}</button>`;
+  $("#overlay").innerHTML = `<div class="ov" style="background:transparent"><div class="scrim" style="background:transparent" data-act="close"></div></div>
+    <div class="menu" role="menu" aria-label="Account">
+      <div style="padding:10px 12px" class="small"><b>${esc((me.name || "Craig").split(" ")[0])}</b><div class="muted xs">${esc(me.login || "")} · Owner</div></div><div class="sep"></div>
+      ${opt("light", "today", "Light appearance")}${opt("dark", "moon", "Dark appearance")}${opt("system", "system", "Match device")}<div class="sep"></div>
+      <button type="button" role="menuitem" data-act="go" data-arg="system/status">${ic("system")}System</button>
+      <p class="xs muted" style="padding:6px 12px 8px">Signed in through Tailscale. To sign out, sign out of Tailscale on this device.</p></div>`;
+  const first = $("#overlay .menu button");
+  if (first) first.focus();
+}
+
+// Everything you can jump to: screens, plus tasks, agents, routines and decisions already loaded.
+function paletteIndex() {
+  const out = [];
+  const add = (group, label, href, sub, icon) => out.push({ group, label, href, sub: sub || "", icon });
+  add("Actions", "New task for an agent", null, "", "plus");
+  add("Actions", "New chat with Max", "max/new", "", "max");
+  add("Actions", "Log food", "health/food", "", "health");
+  for (const x of NAV) if (x.h) add("Go to", x.t, x.h, "", x.i);
+  HEALTH_TABS.forEach(([k, t]) => add("Go to", `Health › ${t}`, "health/" + k, "", "health"));
+  LIB_TABS.forEach(([k, t]) => add("Go to", `Library › ${t}`, "library/" + k, "", "library"));
+  SYS_TABS.forEach(([k, t]) => add("Go to", `System › ${t}`, "system/" + k, "", "system"));
+  const w = S.cache.work && S.cache.work.work;
+  ((w && w.ok && w.data.issues) || []).forEach((i) => add("Work", `${i.ref ? i.ref + " " : ""}${i.title}`, "work/" + i.id, i.status_text || ISSUE_TEXT[i.status] || "", "work"));
+  const ag = S.cache.agents && S.cache.agents.agents;
+  ((ag && ag.ok && ag.data) || []).forEach((a) => add("Agents", a.name, "agents/" + a.id, a.title || "", "agents"));
+  const rt = S.cache.routines && S.cache.routines.routines;
+  ((rt && rt.ok && rt.data) || []).forEach((r) => add("Routines", r.title, "routines/" + r.id, r.schedule || "", "routines"));
+  const ap = S.cache.approvals;
+  if (ap) {
+    const list = [...((ap.broker_pending && ap.broker_pending.data) || []), ...((ap.board && ap.board.data) || [])];
+    list.forEach((a) => add("Decisions", a.title, `approvals/${a.source}:${encodeURIComponent(a.id)}`, APPROVAL_TEXT[a.status] || a.status, "approvals"));
+  }
+  (S.artIndex || []).forEach((a) => add("Library", a.title, "library/files/" + encodeURIComponent(a.name), a.label, "file"));
+  return out;
+}
+
+function paletteResults(q) {
+  q = (q || "").trim().toLowerCase();
+  const all = paletteIndex().filter((x) => !q || `${x.label} ${x.sub} ${x.group}`.toLowerCase().includes(q));
+  const groups = new Map();
+  all.forEach((x) => { if (!groups.has(x.group)) groups.set(x.group, []); groups.get(x.group).push(x); });
+  let i = 0;
+  const html = [...groups].filter(([g]) => q || ["Actions", "Go to", "Decisions"].includes(g)).map(([g, xs]) => `<div class="grp">${esc(g)}</div>${xs.slice(0, q ? 6 : g === "Go to" ? 8 : 5).map((x) => {
+    const cls = i++ === S.palHl ? ' class="hl"' : "";
+    return x.href ? `<a href="#${esc(x.href)}"${cls}>${ic(x.icon, 16)}<span>${esc(x.label)}</span><span class="s">${esc(x.sub)}</span></a>`
+      : `<a href="#" data-act="createTask"${cls}>${ic(x.icon, 16)}<span>${esc(x.label)}</span><span class="s">${esc(x.sub)}</span></a>`;
+  }).join("")}`).join("");
+  return html || `<p class="small muted" style="padding:16px">Nothing matches “${esc(q)}”. Search covers screens and the board records you can open. Mail and calendar aren't searched here.</p>`;
+}
+
+function openPalette() {
+  S.palHl = 0;
+  $("#overlay").innerHTML = `<div class="ov top-align" style="place-items:start center"><div class="scrim" data-act="close"></div>
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Search or jump to">
+      <div class="pin">${ic("search", 18)}<label class="sr" for="pal-q">Search</label><input id="pal-q" autocomplete="off" placeholder="Search tasks, agents, routines, decisions or jump to…"><kbd>esc</kbd></div>
+      <div class="res" id="pal-res">${paletteResults("")}</div>
+      <div class="foot"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span class="desk-only">Only things you can open</span></div></div></div>`;
+  $("#pal-q").focus();
+  // Fill in records not loaded yet, quietly.
+  Promise.all([
+    S.cache.work ? null : load("work", "/api/work"),
+    S.cache.agents ? null : load("agents", "/api/agents"),
+    S.cache.routines ? null : load("routines", "/api/routines"),
+    S.artIndex ? null : api("/api/artifacts").then((d) => { S.artIndex = d.artifacts; }).catch(() => { S.artIndex = []; }),
+  ]).then(() => { const q = $("#pal-q"), r = $("#pal-res"); if (q && r) r.innerHTML = paletteResults(q.value); });
+}
+
+function paletteKey(e) {
+  const links = [...document.querySelectorAll("#pal-res a")];
+  if (!links.length) return;
+  e.preventDefault();
+  if (e.key === "Enter") return links[S.palHl || 0].click();
+  S.palHl = Math.max(0, Math.min(links.length - 1, (S.palHl || 0) + (e.key === "ArrowDown" ? 1 : -1)));
+  links.forEach((a, i) => a.classList.toggle("hl", i === S.palHl));
+  links[S.palHl].scrollIntoView({ block: "nearest" });
+}
+
 /* ---------- dialogs ---------- */
 
 function modal(title, body, foot) {
@@ -936,6 +1030,10 @@ async function act(name, arg, el) {
       return;
     }
     if (name === "planEvent") return openPlanEvent(arg);
+    if (name === "palette") return openPalette();
+    if (name === "acctMenu") return openAcctMenu();
+    if (name === "theme") { setTheme(arg); return openAcctMenu(); }
+    if (name === "go") { closeModal(); location.hash = arg; return; }
     if (name === "skillSrc") return openSkillSource(arg);
     if (name === "memAsk") {
       const [how, i] = arg.split(":");
@@ -1034,6 +1132,7 @@ async function act(name, arg, el) {
 }
 
 document.addEventListener("click", (e) => {
+  if (e.target.closest("#pal-res a[href]:not([data-act])")) setTimeout(closeModal, 0); // same-page jumps don't fire hashchange
   const el = e.target.closest("[data-act]");
   if (!el) return;
   e.preventDefault();
@@ -1046,6 +1145,8 @@ document.addEventListener("change", (e) => {
   render();
 });
 document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if ($("#pal-q")) closeModal(); else openPalette(); return; }
+  if (e.target.id === "pal-q" && ["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) return paletteKey(e);
   if (e.key === "Escape" && $("#overlay").innerHTML) closeModal();
   if (e.target.id === "max-in" && e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
@@ -1054,6 +1155,7 @@ document.addEventListener("keydown", (e) => {
 });
 document.addEventListener("input", (e) => {
   if (e.target.id === "max-in") S.chatDraft = e.target.value;
+  if (e.target.id === "pal-q") { S.palHl = 0; $("#pal-res").innerHTML = paletteResults(e.target.value); }
   if (e.target.id === "skill-q") {
     const q = e.target.value.trim().toLowerCase();
     document.querySelectorAll(".panel.skill").forEach((el) => { el.hidden = !!q && !el.dataset.q.includes(q); });
