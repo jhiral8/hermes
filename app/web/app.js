@@ -13,7 +13,9 @@ const ic = (n, s = 18) =>
 Object.assign(window.ICON_PATHS || {}, {
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
 });
+const fmtSize = (b) => (b == null ? "" : b < 1024 ? b + " B" : b < 1048576 ? Math.round(b / 1024) + " KB" : (b / 1048576).toFixed(1) + " MB");
 const logoMark = (size = 28) =>
   `<svg class="logo" width="${size}" height="${size}" viewBox="0 0 32 32" role="img" aria-label="Hermes"><rect width="32" height="32" rx="9" fill="var(--ink)"/><g transform="translate(-1.1 1.5)"><path d="M5.5 9h3.4v5.8h7.2V9h3.4v14h-3.4v-5.2H8.9V23H5.5z" fill="var(--on-ink)"/><path d="M19.5 9.2C22.4 6.9 25.9 5.8 29.4 5.9c-.6 1.3-1.5 2.4-2.6 3.2 1.1 0 2-.1 2.9-.4-.8 1.4-2 2.5-3.4 3.3.9.1 1.8 0 2.6-.3-1.3 2-3.4 3.4-5.8 3.9-1.2.3-2.4.3-3.6.1z" fill="var(--logo-wing)"/></g></svg>`;
 
@@ -110,7 +112,7 @@ const NAV = [
   { h: "routines", i: "routines", t: "Routines" },
   { label: "Workspace" },
   { h: "approvals", i: "approvals", t: "Approvals", count: true },
-  { h: "soon/library", i: "library", t: "Library", soon: 5 },
+  { h: "library", i: "library", t: "Library" },
   { h: "system/status", i: "system", t: "System" },
 ];
 
@@ -136,7 +138,7 @@ function renderShell(route) {
     }).join("")}</nav>
     <div class="side-foot"><div class="acct"><span class="avatar">${esc(initials(me.name || "Craig"))}</span><span class="who"><b style="display:block;font-size:13.5px;font-weight:600">${esc((me.name || "Craig").split(" ")[0])}</b><span class="xs muted">Owner · ${esc(me.login || "signed in through Tailscale")}</span></span></div></div>`;
 
-  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", planner: "Planner", more: "More", soon: "Coming next" }[area] || "Hermes";
+  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", planner: "Planner", library: "Library", more: "More", soon: "Coming next" }[area] || "Hermes";
   $("#top").innerHTML = `
     <a href="#today" class="phone-only" aria-label="Hermes home" style="display:flex">${logoMark(26)}</a>
     <div class="crumb"><span class="cur">${esc(title)}</span></div>
@@ -462,7 +464,7 @@ async function screenSystem(tab) {
 }
 
 function screenMore() {
-  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"], ["inbox", "inbox", "Inbox", "Your mail, read-only"], ["planner", "planner", "Planner", "Your calendar, read-only"]];
+  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"], ["inbox", "inbox", "Inbox", "Your mail, read-only"], ["planner", "planner", "Planner", "Your calendar, read-only"], ["library", "library", "Library", "Files, notes, memory and skills"]];
   return `<div class="ph"><div class="ph-t"><h1>More</h1></div></div><section class="panel"><div class="list">${items.map(([h, i, t, s]) => `<a class="li" href="#${h}"><span class="main"><span class="t">${ic(i, 16)} ${t}</span><span class="s">${s}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div></section>`;
 }
 
@@ -471,9 +473,98 @@ function screenSoon(what) {
     max: ["Max", 3, "Chat with Max here as well as on Signal, with the artifacts panel from the mockup."],
     inbox: ["Inbox", 5, "Your mail, shown to you only. It never goes to Max or any model."],
     planner: ["Planner", 5, "Your calendar, once it's connected."],
-    library: ["Library", 5, "salt.md notes, signed in as you."],
   }[what] || ["This screen", "", "Coming in a later phase."];
   return `<div class="ph"><div class="ph-t"><h1>${esc(info[0])}</h1></div></div><div class="empty" style="max-width:520px"><h3>Coming in Phase ${info[1]}</h3><p class="small">${esc(info[2])}</p></div>`;
+}
+
+/* ---------- Library ---------- */
+
+const LIB_TABS = [["files", "Files & research"], ["notes", "Notes · salt.md"], ["memory", "Memory"], ["skills", "Skills"]];
+
+// Start a new chat with Max with the text ready to send (nothing is sent until Craig presses Send).
+function askMax(text) {
+  S.chatDraft = text;
+  S.art = null;
+  location.hash = "max/new";
+  setTimeout(() => { const b = $("#max-in"); if (b) { b.focus(); b.setSelectionRange(b.value.length, b.value.length); } }, 120);
+}
+
+async function screenLibrary(rest) {
+  let tab = rest[0] || "files";
+  if (!LIB_TABS.some(([k]) => k === tab)) tab = "files";
+  const head = (sub, actions = "") => `<div class="ph"><div class="ph-t"><h1>Library</h1><p class="sub">${sub}</p></div>${actions ? `<div class="ph-a">${actions}</div>` : ""}</div>
+    <nav class="tabs" aria-label="Sections">${LIB_TABS.map(([k, t]) => `<a href="#library/${k}"${k === tab ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>`;
+  const sub = "What Max has made, your shared notes, what Max remembers and the skills he uses.";
+
+  if (tab === "files" && rest[1]) {
+    const name = decodeURIComponent(rest.slice(1).join("/"));
+    let a;
+    try { a = await api(`/api/artifacts/${encodeURIComponent(name)}`); } catch (e) {
+      return head(sub) + `<div class="btns" style="margin-bottom:12px"><a class="btn ghost sm" href="#library/files">${ic("back", 14)}Back</a></div><div class="empty"><h3>File not found</h3><p class="small">${esc(e.message)}</p></div>`;
+    }
+    if (!S.libArt || S.libArt.name !== a.name) S.libTab = "preview";
+    S.libArt = a;
+    const code = S.libTab === "code";
+    return `<div class="btns" style="margin-bottom:12px"><a class="btn ghost sm" href="#library/files">${ic("back", 14)}Library</a></div><div class="ph"><div class="ph-t"><h1>${esc(a.title)}</h1><p class="sub">${esc(a.label)} · made by Max · updated ${esc(when(a.updated))}</p></div>
+      <div class="ph-a"><button type="button" class="btn ghost" data-act="artCopy">${ic("copy", 15)}Copy</button><button type="button" class="btn" data-act="artDownload">${ic("download", 15)}Download</button><button type="button" class="btn primary" data-act="artAsk">Ask Max for changes</button></div></div>
+      <div class="stack"><div class="row-flex" style="gap:8px;flex-wrap:wrap">${artTabs(a, code)}<span class="xs muted mono">${esc(a.name)}</span></div>
+      <section class="panel lib-file">${artBody(a, code)}</section>
+      <p class="xs muted">Pages preview in a sandbox with scripts and network turned off, so a page Max made can't act on the app.</p></div>`;
+  }
+
+  if (tab === "files") {
+    let list, err;
+    try { list = (await api("/api/artifacts")).artifacts; } catch (e) { err = e.message; }
+    const body = list == null ? notConnected("Max's files", err)
+      : list.length ? `<section class="panel"><div class="list">${list.map((a) => `<a class="li" href="#library/files/${encodeURIComponent(a.name)}">${ic("file", 18)}<span class="main"><span class="t">${esc(a.title)}</span><span class="s">${esc(a.label)} · Max · ${esc(when(a.updated))} · ${esc(fmtSize(a.size))}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div></section>`
+      : `<div class="empty"><h3>Nothing here yet</h3><p class="small">Ask Max for a page, document or table and it appears here as well as in the chat.</p><a class="btn" href="#max/new">Open Max</a></div>`;
+    return head(sub, `<a class="btn" href="#max/new">${ic("plus", 15)}Ask Max for a page</a>`) + body;
+  }
+
+  const lib = await api("/api/library").catch((e) => ({ ok: false, error: e.message }));
+  if (tab === "notes") {
+    const url = lib.notes_url;
+    return head(sub, url ? `<a class="btn primary" href="${esc(url)}" target="_blank" rel="noopener">Open salt.md ${ic("ext", 15)}</a>` : "") + `<div class="cols even">
+      <section class="panel"><h2 style="margin-bottom:8px">Notes in salt.md</h2><p class="small">Your notes workspace runs on your own server. Pages and databases live there, and you sign in with your own account and two-factor code.</p>
+        ${url ? `<p class="xs muted mono" style="margin-top:10px">${esc(url)}</p>` : `<p class="small muted" style="margin-top:8px">The salt address isn't in the app's settings yet.</p>`}</section>
+      <section class="panel"><h2 style="margin-bottom:8px">What agents can do there</h2><div class="allow small">
+        <div class="row-flex">${ic("check", 16)}<span>Max, Codex and Claude read and write the six shared notebooks</span></div>
+        <div class="row-flex">${ic("check", 16)}<span>Handoffs between agents go in the Team notebook</span></div>
+        <div class="row-flex muted">${ic("lock", 16)}<span>Agents can't delete or trash pages, comments or views</span></div>
+        <div class="row-flex muted">${ic("lock", 16)}<span>Your personal workspace isn't shared with them</span></div></div>
+        <p class="xs muted" style="margin-top:10px">Agents can still change text. The server backs salt up every night.</p></section></div>`;
+  }
+
+  if (!lib.ok) return head(sub) + notConnected(tab === "memory" ? "Max's memory" : "Max's skills", lib.error);
+  const age = lib.stale ? `<div class="notice warn" role="status">${ic("alert")}<div><b>Last copied ${lib.age_min} minutes ago.</b> The feed is behind, so this may be out of date.</div></div>` : "";
+
+  if (tab === "memory") {
+    S.libMemory = lib.memory;
+    const stores = [...new Set(lib.memory.map((m) => m.store))];
+    const body = lib.memory.length ? stores.map((st) => `<section class="panel"><div class="panel-h"><h2>${esc(st)}</h2><span class="badge">${lib.memory.filter((m) => m.store === st).length}</span></div><div class="list">${lib.memory.map((m, i) => m.store !== st ? "" : `<div class="li"><span class="main"><span class="t" style="white-space:pre-wrap;font-weight:450">${esc(m.text)}</span></span><span class="end"><button type="button" class="btn ghost sm" data-act="memAsk" data-arg="fix:${i}">Correct</button><button type="button" class="btn ghost sm" data-act="memAsk" data-arg="forget:${i}">Forget</button></span></div>`).join("")}</div></section>`).join("")
+      : `<div class="empty"><h3>Nothing remembered</h3><p class="small">Things you ask Max to remember appear here.</p></div>`;
+    return head(sub) + `<div class="stack s24">${age}${body}
+      <p class="small muted" style="max-width:72ch">A remembered preference isn't a permission: Max's access is set by his sandbox and the approval broker, not by memory. Correct and Forget open a chat with Max with the request ready; nothing changes until you send it. Copied from Max every 5 minutes.</p></div>`;
+  }
+
+  // skills
+  const cats = [...new Set(lib.skills.map((x) => x.category || "General"))];
+  const card = (x) => `<section class="panel skill" data-q="${esc((x.name + " " + x.description + " " + x.category).toLowerCase())}"><div class="row-flex" style="margin-bottom:6px"><h2 style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(x.name)}</h2>${x.version ? badge("line", "v" + x.version) : ""}</div>
+    <p class="small">${esc(x.description || "No description.")}</p>
+    <dl class="kv small" style="margin-top:10px"><dt>Folder</dt><dd class="mono">${esc(x.id)}</dd><dt>Updated</dt><dd>${esc(when(x.updated))}</dd></dl>
+    <div class="btns" style="margin-top:12px"><button type="button" class="btn sm" data-act="skillSrc" data-arg="${esc(x.id)}">Inspect source</button></div></section>`;
+  const body = lib.skills.length ? `<div class="row-flex" style="margin-bottom:14px"><label class="sr" for="skill-q">Filter skills</label><input class="inp" id="skill-q" type="search" placeholder="Filter ${lib.skills.length} skills" style="max-width:340px"></div>
+    ${cats.map((c) => `<div class="skill-group"><div class="eyebrow" style="margin:6px 0 10px">${esc(c[0].toUpperCase() + c.slice(1).replace(/-/g, " "))}</div><div class="cols three">${lib.skills.filter((x) => (x.category || "General") === c).map(card).join("")}</div></div>`).join("")}`
+    : `<div class="empty"><h3>No skills found</h3><p class="small">Skills Max has installed appear here.</p></div>`;
+  return head(sub) + `<div class="stack s24">${age}<div>${body}</div><p class="small muted" style="max-width:72ch">Read-only. Viewing a skill doesn't turn it on or off. Instructions inside a skill are Max's tools, not your permission for anything.</p></div>`;
+}
+
+async function openSkillSource(id) {
+  try {
+    const x = await api(`/api/library/skill/${encodeURIComponent(id)}`);
+    modal(`${x.name} · source`, `<p class="xs muted mono" style="margin-bottom:8px">skills/${esc(x.id)}/SKILL.md</p><pre class="art-code" style="max-height:60vh">${esc(x.source)}</pre>`,
+      `<button type="button" class="btn primary" data-act="close">Close</button>`);
+  } catch (e) { toast(e.message); }
 }
 
 /* ---------- Max chat ---------- */
@@ -547,19 +638,25 @@ function artPanel() {
   const a = st.data;
   if (!a) return `<aside class="art-panel" aria-label="File">${head("Loading", st.name)}<p class="small muted">${esc(st.error || "Opening…")}</p></aside>`;
   const code = st.tab === "code";
-  let body;
-  if (code || a.kind === "json" || a.kind === "text") body = `<pre class="art-code">${esc(a.text)}</pre>`;
-  else if (a.kind === "html") body = `<iframe class="art-frame" sandbox="" referrerpolicy="no-referrer" title="${esc(a.title)} preview" srcdoc="${esc(a.text)}"></iframe>`;
-  else if (a.kind === "md") body = `<div class="md art-doc">${md(a.text)}</div>`;
-  else if (a.kind === "svg") body = `<div class="art-svg"><img alt="${esc(a.title)}" src="data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(a.text)))}"></div>`;
-  else if (a.kind === "csv") body = `<div class="art-doc" style="overflow:auto">${csvTable(a.text)}</div>`;
-  const tabs = ["html", "md", "svg", "csv"].includes(a.kind) ? `<div class="seg" role="group"><button type="button" aria-pressed="${!code}" data-act="artTab" data-arg="preview">Preview</button><button type="button" aria-pressed="${code}" data-act="artTab" data-arg="code">Code</button></div>` : "";
   return `<aside class="art-panel" aria-label="File">${head(`${a.label} · Artifact`, a.title)}
-    <div class="row-flex" style="gap:8px;flex-wrap:wrap">${tabs}<span class="xs muted">${esc(a.name)} · ${esc(when(a.updated))}</span></div>
-    <div class="art-body">${body}</div>
+    <div class="row-flex" style="gap:8px;flex-wrap:wrap">${artTabs(a, code)}<span class="xs muted">${esc(a.name)} · ${esc(when(a.updated))}</span></div>
+    <div class="art-body">${artBody(a, code)}</div>
     <div class="btns"><button type="button" class="btn ghost sm" data-act="artCopy">Copy</button><button type="button" class="btn sm" data-act="artDownload">${ic("download", 15)}Download</button><button type="button" class="btn primary sm" data-act="artAsk">Ask for changes</button></div>
     <p class="xs muted">Pages preview in a sandbox with scripts and network turned off.</p></aside>`;
 }
+
+// A file Max made, shown safely: pages in a sandbox with scripts and network off.
+function artBody(a, code) {
+  if (code || a.kind === "json" || a.kind === "text") return `<pre class="art-code">${esc(a.text)}</pre>`;
+  if (a.kind === "html") return `<iframe class="art-frame" sandbox="" referrerpolicy="no-referrer" title="${esc(a.title)} preview" srcdoc="${esc(a.text)}"></iframe>`;
+  if (a.kind === "md") return `<div class="md art-doc">${md(a.text)}</div>`;
+  if (a.kind === "svg") return `<div class="art-svg"><img alt="${esc(a.title)}" src="data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(a.text)))}"></div>`;
+  if (a.kind === "csv") return `<div class="art-doc" style="overflow:auto">${csvTable(a.text)}</div>`;
+  return "";
+}
+const artTabs = (a, code) => ["html", "md", "svg", "csv"].includes(a.kind) ? `<div class="seg" role="group"><button type="button" aria-pressed="${!code}" data-act="artTab" data-arg="preview">Preview</button><button type="button" aria-pressed="${code}" data-act="artTab" data-arg="code">Code</button></div>` : "";
+// The file on screen: the Library's file page, or the chat's side panel.
+const curArt = () => ((location.hash || "").startsWith("#library/files/") ? S.libArt : S.art && S.art.data);
 
 function chatMsg(m, i, live) {
   const me = m.role === "me";
@@ -727,15 +824,22 @@ async function act(name, arg, el) {
       return;
     }
     if (name === "planEvent") return openPlanEvent(arg);
+    if (name === "skillSrc") return openSkillSource(arg);
+    if (name === "memAsk") {
+      const [how, i] = arg.split(":");
+      const m = (S.libMemory || [])[Number(i)];
+      if (!m) return;
+      return askMax(how === "forget" ? `Please forget this from your memory: "${m.text}"` : `Please correct this in your memory: "${m.text}". It should say: `);
+    }
     if (name === "createTask") return openCreateTask();
     if (name === "newChat") { S.chatDraft = ""; location.hash = "max/new"; setTimeout(() => { const b = $("#max-in"); if (b) b.focus(); }, 50); return; }
     if (name === "chatSend") return chatSend();
     if (name === "artOpen") { S.art = { name: arg, tab: "preview" }; return render(); }
     if (name === "artClose") { S.art = null; return render(); }
-    if (name === "artTab") { if (S.art) S.art.tab = arg; return render(); }
-    if (name === "artCopy") { const a = S.art && S.art.data; if (a) { await navigator.clipboard.writeText(a.text); toast("Copied."); } return; }
+    if (name === "artTab") { if ((location.hash || "").startsWith("#library/")) S.libTab = arg; else if (S.art) S.art.tab = arg; return render(); }
+    if (name === "artCopy") { const a = curArt(); if (a) { await navigator.clipboard.writeText(a.text); toast("Copied."); } return; }
     if (name === "artDownload") {
-      const a = S.art && S.art.data;
+      const a = curArt();
       if (!a) return;
       const url = URL.createObjectURL(new Blob([a.text], { type: "text/plain" }));
       const link = document.createElement("a");
@@ -744,9 +848,10 @@ async function act(name, arg, el) {
       return;
     }
     if (name === "artAsk") {
-      const a = S.art && S.art.data;
+      const a = curArt();
       if (!a) return;
       S.chatDraft = `About ${a.name}: `;
+      if ((location.hash || "").startsWith("#library/")) return askMax(S.chatDraft);
       if (matchMedia("(max-width:1279px)").matches) S.art = null;
       await render();
       const b = $("#max-in");
@@ -837,6 +942,11 @@ document.addEventListener("keydown", (e) => {
 });
 document.addEventListener("input", (e) => {
   if (e.target.id === "max-in") S.chatDraft = e.target.value;
+  if (e.target.id === "skill-q") {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll(".panel.skill").forEach((el) => { el.hidden = !!q && !el.dataset.q.includes(q); });
+    document.querySelectorAll(".skill-group").forEach((g) => { g.hidden = !g.querySelector(".panel.skill:not([hidden])"); });
+  }
 });
 
 /* ---------- Health (Phase 4, step 1: read-only) ----------
@@ -1423,6 +1533,7 @@ async function render() {
   else if (area === "health") html = await screenHealth(rest);
   else if (area === "inbox") html = await screenInbox(rest);
   else if (area === "planner") html = await screenPlanner(rest);
+  else if (area === "library") html = await screenLibrary(rest);
   else html = await screenToday();
   if (seq !== renderSeq) return; // a newer render started
   if (!S.cache.approvals && area !== "approvals") load("approvals", "/api/approvals").then(() => renderShell(route));
@@ -1439,7 +1550,7 @@ async function render() {
 
 async function init() {
   try { S.me = await api("/api/me"); S.meta = { demo: S.me.demo, board_url: S.me.board_url, broker_url: S.me.broker_url, stop_ready: S.me.stop_ready }; } catch (_) { S.offline = true; }
-  window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
+  window.addEventListener("hashchange", () => { closeModal(); window.scrollTo(0, 0); render(); });
   await render();
   setInterval(() => {
     const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);

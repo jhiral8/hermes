@@ -38,10 +38,11 @@ from health import Health
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
+from max_library import LibraryError, MaxLibrary, SampleLibrary
 import foods as food_lookup
 from foods import Foods, Lookup, SavedFoods
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 STREAMED = object()  # a handler already wrote the response
 HERE = Path(__file__).resolve().parent
 DEFAULT_WEB = HERE.parent / "web"
@@ -281,6 +282,14 @@ def make_planner(cfg, app):
     return Calendar(pc) if pc else None
 
 
+def make_library(cfg, app):
+    """Max's memory and skills, read from the exporter's feed (a sample in sample-data mode)."""
+    if app.demo:
+        return SampleLibrary()
+    feed = (cfg.get("library") or {}).get("feed")
+    return MaxLibrary(feed) if feed else None
+
+
 def make_foods(cfg, app):
     """Barcode lookup and saved foods for the Food screen (sample data in sample-data mode)."""
     if app.demo:
@@ -295,7 +304,7 @@ def _today_london():
     return Health({}).today()
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None):
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -312,6 +321,9 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         foods = make_foods(cfg, app)
     if planner is None:
         planner = make_planner(cfg, app)
+    if library is None:
+        library = make_library(cfg, app)
+    library_cfg = cfg.get("library") or {}
 
     get_routes = {
         "/api/today": app.today,
@@ -381,6 +393,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._inbox_get(path[len("/api/inbox"):].strip("/"))
             elif path == "/api/planner":
                 self._planner_get()
+            elif path == "/api/library" or path.startswith("/api/library/skill/"):
+                self._library_get(urllib.parse.unquote(path[len("/api/library/skill/"):]) if "/skill/" in path else None)
             elif path == "/api/health/foods" or path.startswith("/api/health/barcode/"):
                 self._foods_get(path[len("/api/health/"):])
             elif path.startswith("/api/health/"):
@@ -513,6 +527,22 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 return
             # Events are never written to disk or cached.
             self._json(200, {"ok": True, **out, **app.meta()})
+
+        def _library_get(self, skill):
+            notes = {"notes_url": library_cfg.get("notes_url")}
+            try:
+                if library is None:
+                    raise LibraryError("Max's memory and skills aren't being shared with the app yet")
+                data = library.get()
+            except LibraryError as e:
+                self._json(404 if skill else 200, {"ok": False, "error": str(e), **notes, **app.meta()})
+                return
+            if skill is None:
+                skills = [{k: v for k, v in x.items() if k != "source"} for x in data.get("skills", [])]
+                self._json(200, {"ok": True, **data, "skills": skills, **notes, **app.meta()})
+                return
+            hit = next((x for x in data.get("skills", []) if x.get("id") == skill), None)
+            self._json(200 if hit else 404, hit or {"ok": False, "error": "That skill isn't there any more."})
 
         def _health_get(self, what):
             if health is None:
@@ -647,7 +677,7 @@ def main(argv=None):
     srv = ThreadingHTTPServer((cfg["listen_host"], cfg["listen_port"]),
                               make_handler(cfg, args.web, cache, app, make_chat(cfg, app, artifacts), artifacts,
                                            make_health(cfg, app), make_inbox(cfg, app), make_foods(cfg, app),
-                                           make_planner(cfg, app)))
+                                           make_planner(cfg, app), make_library(cfg, app)))
     print(f"hermes-app {VERSION} on {cfg['listen_host']}:{cfg['listen_port']}"
           f"{' (SAMPLE DATA)' if demo else ''}", flush=True)
     srv.serve_forever()

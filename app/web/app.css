@@ -46,3 +46,7 @@ a.spark-card { text-decoration: none; color: inherit; }
 .tg-ev.short{display:flex;gap:6px;align-items:baseline;padding-top:2px}
 .tg-ev.short b{flex:0 1 auto;min-width:2em}
 .tg-ev.short > span{flex:0 100 auto;min-width:0}
+.lib-file{padding:0;overflow:hidden}
+.lib-file .art-frame{width:100%;height:70vh;border:0;display:block}
+.lib-file .art-doc,.lib-file .art-code,.lib-file .art-svg{padding:20px;margin:0}
+.panel.skill p.small{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}

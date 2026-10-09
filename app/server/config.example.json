@@ -135,5 +135,9 @@
     "off_enabled": false,
     "timeout": 6,
     "store_path": "/var/lib/hermes-app/saved-foods.json"
+  },
+  "library": {
+    "feed": "/var/lib/hermes-app-library/library.json",
+    "notes_url": "https://notes.tail4abc29.ts.net"
   }
 }

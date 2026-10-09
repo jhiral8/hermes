@@ -287,3 +287,29 @@ Nothing here goes to Max or any model.
    product (with lookup on), or says "Barcode lookup is off" (with lookup off).
    Saving a food with `POST /api/health/foods` adds it to the file; a second
    `GET /api/health/foods` lists it. `POST` without the X-Hermes-Action header is refused.
+
+## Library: Max's memory and skills (read-only)
+
+The Library shows Max's files (the artifacts folder, already set up), a link to
+salt, and what Max remembers and which skills he has. The app must not read
+Max's home folder (it holds his keys and sessions), so a small exporter runs as
+the hermes user every 5 minutes and copies only `~/.hermes/memories/MEMORY.md`,
+`USER.md` and each `skills/**/SKILL.md` into a feed the app's group can read.
+It writes nothing in Max's folder, has no network, and skips links and hidden
+folders. Nothing new reaches Max or any model.
+
+1. Update the code, then install `hermes-app-library.service` and `.timer` from
+   this folder and enable the timer. If Max's Hermes folder isn't
+   `/home/hermes/.hermes`, change `--home` in the unit.
+2. Check the memory files use Hermes's usual layout: one entry per block,
+   blocks separated by a line holding only `§`. If not, report the layout
+   (not the contents).
+3. Run the service once. `/var/lib/hermes-app-library/library.json` should be
+   owner hermes, group hermes-app, mode 0640, folder 0750.
+4. Add the `library` block from `config.example.json` to the live config and
+   restart hermes-app only.
+5. Test: `GET /api/library` with the login header lists memory entries and
+   skills (no skill text); `GET /api/library/skill/<id>` returns one SKILL.md.
+   Max's sandbox must not be able to read `/var/lib/hermes-app-library`.
+6. Add the timer to the kill switch list (the unit already won't run while
+   `/etc/hermes-paused` exists).
