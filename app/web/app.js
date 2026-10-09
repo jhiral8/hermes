@@ -1416,6 +1416,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("change", (e) => {
   if (e.target.dataset && e.target.dataset.est != null && S.est) { S.est.items[Number(e.target.dataset.est)].on = e.target.checked; estSum(); return; }
   if (e.target.id === "ph-file") { photoChosen(e.target.files && e.target.files[0]); e.target.value = ""; return; }
+  if (e.target.dataset && e.target.dataset.actChange && STRAT_ACTS[e.target.dataset.actChange]) { STRAT_ACTS[e.target.dataset.actChange](e.target.value, e.target); return; }
   const el = e.target.closest("[data-change]");
   if (!el) return;
   S[el.dataset.change] = el.value;
@@ -1439,6 +1440,13 @@ document.addEventListener("input", (e) => {
     S.logT = setTimeout(async () => { const html = await logSearch(q.trim()); if ($("#log-q") && $("#log-q").value === q) $("#log-res").innerHTML = html; }, 250);
   }
   if (e.target.id === "pn-q") { const q = e.target.value.trim(); clearTimeout(S.pnT); S.pnT = setTimeout(() => planSearch(q), 250); }
+  if (e.target.dataset && e.target.dataset.ses && S.ses) {
+    const [ei, si, k] = e.target.dataset.ses.split("|");
+    const st = S.ses.exercises[Number(ei)].sets[Number(si)];
+    if (k === "kg") st.kg = toKg(e.target.value); else st.reps = e.target.value.replace(/[^\d]/g, "");
+    sesSave();
+  }
+  if (e.target.id === "sw-q") { const q = e.target.value.trim(); clearTimeout(S.swT); S.swT = setTimeout(() => swapSearch(q), 250); }
   if (e.target.id === "set-q") { const q = e.target.value.trim(); clearTimeout(S.setT); S.setT = setTimeout(() => setSearch(q), 250); }
   if (e.target.id === "lf-amt" && S.logFood) $("#lf-sum").textContent = logSummary(S.logFood, e.target.value).replace(/<[^>]+>/g, "");
   if (e.target.id === "skill-q") {
@@ -1486,7 +1494,7 @@ async function screenHealth(rest) {
   if (rest[0] === "log") return screenLog(isoDay(rest[1]), rest[2]);
   const sub = HEALTH_TABS.some(([k]) => k === rest[0]) ? rest[0] : "food";
   if (sub === "food") return screenFood(isoDay(rest[1]));
-  if (sub === "train") return screenTrain();
+  if (sub === "train") return rest[1] === "session" ? screenSession(rest[2]) : screenTrain();
   if (sub === "meals") return rest[1] === "recipes" ? screenMeals() : screenMealPlan(rest[1] === "plan" ? isoDay(rest[2]) : null);
   if (sub === "strategy") return screenStrategy();
   return screenProgress(rest[1] === "7" ? 7 : 14);
@@ -1983,7 +1991,7 @@ async function screenTrain() {
         <div class="list" style="margin:12px 0">${nx.exercises.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span>
           <span class="s">Target ${esc(x.target_sets != null ? x.target_sets + " sets" : "—")}${x.last ? ` · Last time ${x.last.top ? fmtN(x.last.top) + " kg · " : ""}${esc((x.last.reps || []).join(", "))} reps` : " · No record yet"}</span></span>
           <span class="end"><button type="button" class="btn sm" data-act="setOpen" data-arg="${esc(String(x.id ?? ""))}|${esc(x.name || "")}|${esc(x.last && x.last.top ? x.last.top : "")}">${ic("plus", 15)}Log set</button></span></div>`).join("")}</div>
-        ${appLink(links.lifttrace, "Open session in LiftTrace", "btn lg")}</section>`
+        <div class="btns"><a class="btn primary lg" href="#health/train/session">${ic("dumbbell", 18)}${sesLoad() && sesLoad().date === d.today ? "Resume workout" : "Start workout"}</a>${appLink(links.lifttrace, "Open in LiftTrace", "btn lg")}</div></section>`
     : `<section class="panel"><p class="small muted">No active programme in LiftTrace.</p></section>`;
 
   const sessions = t.sessions.length
@@ -1995,7 +2003,8 @@ async function screenTrain() {
   const p = t.program;
   const programme = `<section class="panel"><div class="eyebrow">Current programme</div><h2 class="h2-serif" style="margin-bottom:6px">${esc(p.name || "No programme")}</h2>
     ${p.weeks ? `<p class="small muted">Week ${esc(p.current_week)} of ${esc(p.weeks)}</p>` : ""}
-    <ol class="small" style="padding-left:18px;margin:12px 0 0">${(nx ? t.program.templates : []).map((x) => `<li>${esc(x.name)}</li>`).join("")}</ol></section>`;
+    <div class="list" style="margin-top:12px">${(nx ? t.program.templates : []).map((x, i) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}${i === t.next_index ? ` <span class="badge info">Next</span>` : ""}</span><span class="s">${esc(x.day_label ? x.day_label + " · " : "")}${(x.exercises || []).map((e) => esc(e.name) + (e.target_sets ? ` ${e.target_sets}×` : "")).join(" · ")}</span></span><span class="end"><a class="btn sm" href="#health/train/session/${i}">Start</a></span></div>`).join("")}</div>
+    <p class="xs muted" style="margin-top:8px">To change programme, use LiftTrace. Hermes never changes your programme, even when an agent suggests it.</p></section>`;
 
   const records = r.length
     ? `<section class="panel"><h2 style="margin-bottom:8px">Personal bests</h2><div class="list">${r.map((x) => `<div class="li"><span class="main">
@@ -2003,6 +2012,127 @@ async function screenTrain() {
     : "";
 
   return head + `<div class="stack s24"><div class="cols"><div class="stack s24">${next}${sessions}</div><div class="stack s24">${programme}${records}</div></div></div>`;
+}
+
+/* ---------- Live workout ----------
+   The session lives in this browser until it's finished. Each ticked set goes
+   straight into LiftTrace; a set that couldn't be sent stays marked and can be
+   sent again. LiftTrace's key can't mark a session complete, so "Finish" only
+   ends it here. */
+
+const SES_KEY = "hermes-session";
+const LB = 2.20462;
+function sesSave() { try { if (S.ses) localStorage.setItem(SES_KEY, JSON.stringify(S.ses)); else localStorage.removeItem(SES_KEY); } catch (_) { /* private mode */ } }
+function sesLoad() { try { return JSON.parse(localStorage.getItem(SES_KEY) || "null"); } catch (_) { return null; } }
+const sesUnit = () => (S.ses && S.ses.unit) || "kg";
+const showLoad = (kg) => (kg == null || kg === "" ? "" : sesUnit() === "lb" ? String(Math.round(kg * LB * 2) / 2) : String(kg));
+const toKg = (v) => { const n = Number(v); if (v === "" || !(n >= 0)) return null; return sesUnit() === "lb" ? Math.round((n / LB) * 4) / 4 : n; };
+const mmss = (n) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, "0")}`;
+
+function newSession(tpl, prog, today) {
+  return {
+    date: today, name: tpl.name, programme: prog.name || "", started: null, unit: "kg", rest: 90, sound: true,
+    exercises: tpl.exercises.map((x) => {
+      const n = Number(x.target_sets) || 3, reps = (x.last && x.last.reps) || [];
+      return { id: x.id, name: x.name, target: x.target_sets, last: x.last,
+        sets: Array.from({ length: n }, (_, i) => ({ kg: x.last && x.last.top ? x.last.top : null, reps: reps[i] != null ? reps[i] : "", done: false, saved: false })) };
+    }),
+  };
+}
+
+async function screenSession(arg) {
+  const d = await healthData("train", "train");
+  if (!d) return healthDown("train", "Workout");
+  const t = d.train && d.train.ok ? d.train.data : null;
+  if (!t) return healthHead("train", "Workout") + notConnected("LiftTrace", d.train.error);
+  const today = d.today;
+  const saved = sesLoad();
+  const tpls = t.program.templates || [];
+  if (arg != null && tpls[Number(arg)]) {
+    if (!saved || saved.name !== tpls[Number(arg)].name || saved.date !== today) S.ses = newSession(tpls[Number(arg)], t.program, today);
+    else S.ses = saved;
+  } else if (saved && saved.date === today) S.ses = saved;
+  else if (t.next) S.ses = newSession(t.next, t.program, today);
+  else return healthHead("train", "Workout") + `<section class="panel"><div class="empty"><h3>There's no workout to open</h3><p>No active programme in LiftTrace. Log single sets from Train instead.</p></div></section>`;
+  sesSave();
+  S.tpls = tpls;
+  return sessionHtml();
+}
+
+function sessionHtml() {
+  const x = S.ses, u = sesUnit();
+  const doneSets = x.exercises.reduce((a, e) => a + e.sets.filter((s) => s.done).length, 0);
+  const unsent = x.exercises.reduce((a, e) => a + e.sets.filter((s) => s.done && !s.saved).length, 0);
+  const cards = x.exercises.map((e, ei) => `<section class="panel"><div class="panel-h"><div><h2>${esc(e.name)}</h2>
+      <p class="small muted">${e.target != null ? `Target ${esc(e.target)} sets` : "No target"}${e.last ? ` · Last time ${e.last.top ? showLoad(e.last.top) + " " + u + " · " : ""}${esc((e.last.reps || []).join(", "))} reps` : " · No record yet"}${e.swapped ? ` · <span class="badge">Swapped for this session</span>` : ""}</p></div>
+      <div class="r"><button type="button" class="btn ghost sm" data-act="sesSwap" data-arg="${ei}">Swap</button></div></div>
+    <div class="ses-sets"><div class="ses-row ses-head"><span>Set</span><span>Load (${u})</span><span>Reps</span><span></span></div>
+    ${e.sets.map((st, si) => `<div class="ses-row${st.done ? " done" : ""}"><span class="num">${si + 1}</span>
+      <input class="inp num" inputmode="decimal" aria-label="Set ${si + 1} load" data-ses="${ei}|${si}|kg" value="${esc(showLoad(st.kg))}"${st.saved ? " disabled" : ""}>
+      <input class="inp num" inputmode="numeric" aria-label="Set ${si + 1} reps" data-ses="${ei}|${si}|reps" value="${esc(st.reps)}"${st.saved ? " disabled" : ""}>
+      <button type="button" class="btn sm${st.done ? (st.saved ? " ok" : " warn") : " primary"}" data-act="sesTick" data-arg="${ei}|${si}" aria-label="Save set ${si + 1}"${st.saved ? " disabled" : ""}>${st.saved ? ic("check", 15) + "Saved" : st.done ? "Send again" : ic("check", 15) + "Done"}</button></div>`).join("")}</div>
+    <div class="btns" style="margin-top:10px"><button type="button" class="btn ghost sm" data-act="sesAddSet" data-arg="${ei}">${ic("plus", 14)}Add set</button>${e.sets.length > 1 && !e.sets[e.sets.length - 1].done ? `<button type="button" class="btn ghost sm" data-act="sesRmSet" data-arg="${ei}">Remove last set</button>` : ""}</div></section>`).join("");
+  const others = (S.tpls || []).map((tp, i) => `<option value="${i}"${tp.name === x.name ? " selected" : ""}>${esc(tp.name)}</option>`).join("");
+  return healthHead("train", x.name, `${others ? `<select class="inp" style="width:auto" data-act-change="sesPick" aria-label="Session">${others}</select>` : ""}`, `${dayName(x.date)}${x.programme ? " · " + esc(x.programme) : ""}. Each set goes into LiftTrace when you tick it.`) + `
+    <div class="stack s24">
+      <section class="panel"><div class="row-flex" style="gap:12px;align-items:center;flex-wrap:wrap">
+        <div class="seg" role="group" aria-label="Units">${["kg", "lb"].map((v) => `<button type="button" class="chip" aria-pressed="${u === v}" data-act="sesUnit" data-arg="${v}">${v}</button>`).join("")}</div>
+        <span class="badge ${x.started ? "info" : ""}">${x.started ? "In progress" : "Not started"}</span>
+        <span class="small muted">Elapsed <b class="num" id="ses-el">${x.started ? mmss((Date.now() - x.started) / 1000) : "0:00"}</b> · ${doneSets} set${doneSets === 1 ? "" : "s"} done${unsent ? ` · <span style="color:var(--warn,#b54708)">${unsent} not sent yet</span>` : ""}</span>
+        <span style="margin-left:auto" class="btns">${x.started ? `<button type="button" class="btn primary" data-act="sesFinish">Finish session</button>` : `<button type="button" class="btn primary" data-act="sesStart">Start session</button>`}</span></div></section>
+      ${cards}
+      <p class="xs muted">LiftTrace can't be told the session is complete from here, so it keeps your sets but may still show the session as incomplete. Programme changes are made in LiftTrace.</p>
+    </div>${restBar()}`;
+}
+
+function restBar() {
+  const r = S.rest;
+  if (!r) return "";
+  const left = Math.max(0, Math.ceil((r.end - Date.now()) / 1000));
+  return `<div class="rest-bar" role="timer" aria-live="off"><span>${ic("timer", 20)}</span><b class="num" id="rest-left">${mmss(left)}</b><span class="small">Rest</span>
+    <span class="btns" style="margin-left:auto">${[60, 90, 120].map((n) => `<button type="button" class="chip" aria-pressed="${S.ses.rest === n}" data-act="restLen" data-arg="${n}">${mmss(n)}</button>`).join("")}
+    <button type="button" class="chip" data-act="restAdd">+15s</button><button type="button" class="chip" aria-pressed="${S.ses.sound}" data-act="restSound">${S.ses.sound ? "Sound on" : "Sound off"}</button><button type="button" class="btn sm" data-act="restSkip">Skip</button></span></div>`;
+}
+
+function restStart(sec) {
+  S.rest = { end: Date.now() + sec * 1000, beeped: false };
+  clearInterval(S.restT);
+  S.restT = setInterval(() => {
+    const el = $("#rest-left"), es = $("#ses-el");
+    if (es && S.ses && S.ses.started) es.textContent = mmss((Date.now() - S.ses.started) / 1000);
+    if (!S.rest) return;
+    const left = Math.ceil((S.rest.end - Date.now()) / 1000);
+    if (el) el.textContent = mmss(Math.max(0, left));
+    if (left <= 0 && !S.rest.beeped) {
+      S.rest.beeped = true;
+      if (S.ses && S.ses.sound) beep();
+      try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (_) { /* not supported */ }
+      setTimeout(() => { S.rest = null; const b = document.querySelector(".rest-bar"); if (b) b.remove(); }, 2500);
+    }
+  }, 250);
+}
+function beep() {
+  try {
+    const A = window.AudioContext || window.webkitAudioContext; if (!A) return;
+    const c = S.audio || (S.audio = new A()), o = c.createOscillator(), g = c.createGain();
+    o.frequency.value = 880; g.gain.value = 0.15; o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + 0.35);
+  } catch (_) { /* no audio */ }
+}
+function sesRedraw() { sesSave(); const m = $("#main"); if (m) { const y = window.scrollY; m.innerHTML = sessionHtml(); window.scrollTo(0, y); } }
+
+async function sesSend(ei, si) {
+  const e = S.ses.exercises[ei], st = e.sets[si];
+  const r = await api("/api/health/log/set", { body: { exercise_id: e.id, reps: Number(st.reps), ...(st.kg != null ? { weight: st.kg } : {}), date: S.ses.date } });
+  st.saved = true;
+  return r;
+}
+
+
+async function swapSearch(q) {
+  const box = $("#sw-res"); if (!box) return;
+  let d; try { d = await api(`/api/health/search/exercises?q=${encodeURIComponent(q)}`); } catch (e) { box.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
+  S.swapFound = d.exercises || [];
+  box.innerHTML = S.swapFound.length ? `<div class="list">${S.swapFound.map((x, i) => `<button type="button" class="li" data-act="swapPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${esc([x.category, x.equipment].filter(Boolean).join(" · "))}</span></span></button>`).join("")}</div>` : `<p class="small muted">No exercise matches.</p>`;
 }
 
 function openSetLogger(id, name, top) {
@@ -2851,3 +2981,49 @@ async function init() {
 }
 
 init();
+
+// Live workout actions (the session screen is above, with the Train screen).
+Object.assign(STRAT_ACTS, {
+  sesStart: () => { S.ses.started = Date.now(); restStart(0); S.rest = null; sesRedraw(); },
+  sesUnit: (v) => { S.ses.unit = v; sesRedraw(); },
+  sesPick: (v) => { const tp = S.tpls[Number(v)]; if (!tp) return; if (S.ses.exercises.some((e) => e.sets.some((s) => s.done)) && !confirm("Switch session? Sets already saved stay in LiftTrace.")) return sesRedraw(); location.hash = `#health/train/session/${v}`; },
+  sesTick: async (arg, el, busy) => {
+    const [ei, si] = String(arg).split("|").map(Number);
+    const st = S.ses.exercises[ei].sets[si];
+    if (!(Number(st.reps) > 0)) return toast("Enter the reps first.");
+    if (!S.ses.started) S.ses.started = Date.now();
+    st.done = true;
+    busy(true);
+    try { await sesSend(ei, si); }
+    catch (e) { toast(`Not sent: ${e.message} It's kept here, so tap “Send again”.`); }
+    finally { sesRedraw(); }
+    if (st.saved) { restStart(S.ses.rest); sesRedraw(); }
+  },
+  sesAddSet: (ei) => { const e = S.ses.exercises[Number(ei)], last = e.sets[e.sets.length - 1] || {}; e.sets.push({ kg: last.kg ?? null, reps: "", done: false, saved: false }); sesRedraw(); },
+  sesRmSet: (ei) => { const e = S.ses.exercises[Number(ei)]; if (e.sets.length > 1 && !e.sets[e.sets.length - 1].done) e.sets.pop(); sesRedraw(); },
+  sesSwap: (ei) => {
+    S.swapEi = Number(ei);
+    modal("Swap exercise", `<div class="field"><label for="sw-q">Find an exercise</label><input id="sw-q" class="inp" type="search" autocomplete="off" placeholder="e.g. dumbbell press" autofocus></div><div id="sw-res" style="margin-top:10px"></div><p class="xs muted" style="margin-top:8px">Applies to this session only. Your programme doesn't change.</p>`, `<button type="button" class="btn ghost" data-act="close">Cancel</button>`);
+  },
+  swapPick: (i) => {
+    const x = (S.swapFound || [])[Number(i)], e = S.ses.exercises[S.swapEi];
+    if (!x || !e) return;
+    if (e.sets.some((s) => s.saved)) { S.ses.exercises.splice(S.swapEi + 1, 0, { id: x.id, name: x.name, target: e.target, last: null, swapped: true, sets: e.sets.filter((s) => !s.saved).map((s) => ({ ...s, done: false })) }); e.sets = e.sets.filter((s) => s.saved); }
+    else Object.assign(e, { id: x.id, name: x.name, last: null, swapped: true });
+    closeModal(); sesRedraw();
+  },
+  restLen: (n) => { S.ses.rest = Number(n); if (S.rest) S.rest.end = Date.now() + S.ses.rest * 1000; sesRedraw(); },
+  restAdd: () => { if (S.rest) S.rest.end += 15000; },
+  restSound: () => { S.ses.sound = !S.ses.sound; sesRedraw(); },
+  restSkip: () => { S.rest = null; sesRedraw(); },
+  sesFinish: () => {
+    const x = S.ses, done = x.exercises.flatMap((e) => e.sets.filter((s) => s.done).map((s) => ({ e, s })));
+    const unsent = done.filter((d) => !d.s.saved).length;
+    const vol = done.reduce((a, d) => a + (d.s.kg || 0) * (Number(d.s.reps) || 0), 0);
+    modal("Finish session?", `<p>${done.length} set${done.length === 1 ? "" : "s"} · ${x.started ? mmss((Date.now() - x.started) / 1000) : "0:00"} · ${fmtN(Math.round(vol))} kg lifted</p>
+      ${unsent ? `<p class="small" style="color:var(--warn,#b54708);margin-top:8px">${unsent} set${unsent > 1 ? "s haven't" : " hasn't"} reached LiftTrace yet. Finishing drops ${unsent > 1 ? "them" : "it"}.</p>` : ""}
+      <div class="list" style="margin-top:10px">${x.exercises.map((e) => { const s = e.sets.filter((z) => z.saved); return s.length ? `<div class="li"><span class="main"><span class="t">${esc(e.name)}</span><span class="s">${s.map((z) => `${showLoad(z.kg)} × ${z.reps}`).join(" · ")}</span></span></div>` : ""; }).join("")}</div>`,
+      `<button type="button" class="btn ghost" data-act="close">Keep going</button><button type="button" class="btn primary" data-act="sesEnd">Finish</button>`);
+  },
+  sesEnd: () => { S.ses = null; S.rest = null; clearInterval(S.restT); sesSave(); closeModal(); delete S.cache["health:train"]; toast("Session finished. Your sets are in LiftTrace."); location.hash = "#health/train"; },
+});

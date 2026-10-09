@@ -74,3 +74,16 @@ a.spark-card { text-decoration: none; color: inherit; }
 .tabs.sub button{min-height:32px;padding:0 12px;border:0;border-radius:8px;margin:0;background:transparent}
 .tabs.sub button:hover{background:var(--fill)}
 .tabs.sub button[aria-pressed="true"]{background:var(--fill-2);color:var(--fg)}
+
+/* Live workout */
+.ses-sets{display:grid;gap:6px}
+.ses-row{display:grid;grid-template-columns:32px 1fr 1fr auto;gap:8px;align-items:center}
+.ses-row.ses-head{font-size:12px;color:var(--fg-2)}
+.ses-row .inp{text-align:center;min-height:42px}
+.ses-row.done .inp{background:var(--fill)}
+.btn.ok{color:var(--ok,#067647)}
+.btn.warn{color:var(--warn,#b54708)}
+.rest-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:40;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  width:min(720px,calc(100% - 32px));padding:10px 14px;border-radius:14px;background:var(--surface,#fff);border:1px solid var(--line);box-shadow:0 8px 30px rgba(0,0,0,.15)}
+.rest-bar b{font-size:22px}
+@media (max-width:1023px){.rest-bar{bottom:88px}}

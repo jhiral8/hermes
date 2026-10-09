@@ -94,6 +94,11 @@ def _exercises():
     return list(seen.values())
 
 
+def _ex_id(key):
+    """LiftTrace exercise ids are numbers; the sample workouts name them by key."""
+    return next(x["id"] for x in _exercises() if x["key"] == key)
+
+
 # CookTrace keeps nutrition for the whole recipe, not per serving.
 RECIPES = [
     {"id": 1, "name": "Chicken tikka traybake", "servings": 4, "nutrition": {"calories": 2080, "proteins": 180, "carbohydrates": 152, "fat": 72, "fiber": 24}},
@@ -212,7 +217,7 @@ def answer(host, path, q, today):
                 if d.isoformat() == parts[1]:
                     bump = (today - d).days < 4
                     return {"date": parts[1], "name": n, "duration_min": 55, "exercises": [
-                        {"exercise_id": i, "exercise_name": nm, "sets": [{"reps": r, "weight": w * 0.5, "warmup": True}] +
+                        {"exercise_id": _ex_id(i), "exercise_name": nm, "sets": [{"reps": r, "weight": w * 0.5, "warmup": True}] +
                          [{"reps": r, "weight": w + (2.5 if bump and w else 0), "completed": True, "rpe": 7 + s} for s in range(3)]}
                         for i, nm, w, r in e]}
             return {"exercises": []}
@@ -223,7 +228,7 @@ def answer(host, path, q, today):
         if parts[0] == "programs":
             return {"active": True, "name": "Upper/Lower 4-day", "duration_weeks": 8, "current_week": 3, "templates": [
                 {"template_id": str(k), "name": n, "day_label": ["Mon", "Tue", "Thu", "Fri"][k],
-                 "exercises": [{"exercise_id": i, "exercise_name": nm, "target_sets": 3} for i, nm, _, _ in e]}
+                 "exercises": [{"exercise_id": _ex_id(i), "exercise_name": nm, "target_sets": 3} for i, nm, _, _ in e]}
                 for k, (n, e) in enumerate(WORKOUTS)]}
         if parts[0] == "records":
             return {"records": [

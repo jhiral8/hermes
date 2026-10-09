@@ -356,25 +356,27 @@ class Health:
                                  "completed": bool(w.get("completed")), "volume": w.get("total_volume"),
                                  "duration_min": det.get("duration_min"), "exercises": ex})
             prog = lt.get("/programs/active", ttl=300) or {}
-            nxt = None
+            nxt, nxt_i = None, None
             templates = prog.get("templates") or []
+            last_by_ex = {}
+            for s in reversed(sessions):
+                for e in s["exercises"]:
+                    last_by_ex[e["id"]] = {"date": s["date"], "top": e["top"], "reps": e["reps"]}
+
+            def tpl_view(tpl):
+                return {"name": tpl.get("name"), "day_label": tpl.get("day_label"),
+                        "exercises": [{"name": x.get("exercise_name"), "id": x.get("exercise_id"), "target_sets": x.get("target_sets"),
+                                       "last": last_by_ex.get(x.get("exercise_id"))} for x in tpl.get("exercises") or []]}
             if prog.get("active") and templates:
                 names = [x.get("name") for x in templates]
                 last = next((s["name"] for s in sessions if s["name"] in names), None)
-                i = (names.index(last) + 1) % len(names) if last else 0
-                tpl = templates[i]
-                last_by_ex = {}
-                for s in reversed(sessions):
-                    for e in s["exercises"]:
-                        last_by_ex[e["id"]] = {"date": s["date"], "top": e["top"], "reps": e["reps"]}
-                nxt = {"name": tpl.get("name"), "day_label": tpl.get("day_label"),
-                       "exercises": [{"name": x.get("exercise_name"), "id": x.get("exercise_id"), "target_sets": x.get("target_sets"),
-                                      "last": last_by_ex.get(x.get("exercise_id"))} for x in tpl.get("exercises") or []]}
+                nxt_i = (names.index(last) + 1) % len(names) if last else 0
+                nxt = tpl_view(templates[nxt_i])
             return {"sessions": sessions, "program": {
                 "active": bool(prog.get("active")), "name": prog.get("name"),
                 "current_week": prog.get("current_week"), "weeks": prog.get("duration_weeks"),
-                "templates": [{"name": x.get("name"), "day_label": x.get("day_label")} for x in templates]},
-                "next": nxt}
+                "templates": [tpl_view(x) for x in templates]},
+                "next": nxt, "next_index": nxt_i}
 
         def records():
             lt = self._need(self.lt, "LiftTrace")
