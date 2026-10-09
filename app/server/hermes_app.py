@@ -474,6 +474,10 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 return app.decide(user, p[2], body)
             if len(p) == 3 and p[0] == "agents" and p[2] in ("pause", "resume"):
                 return app.pause(user, p[1], p[2] == "pause")
+            if len(p) == 3 and p[0] == "work" and p[2] == "status":
+                return app.set_status(user, p[1], body)
+            if len(p) == 3 and p[0] == "work" and p[2] == "comment":
+                return app.comment(user, p[1], body)
             if len(p) == 3 and p[0] == "runs" and p[2] == "cancel":
                 return app.cancel_run(user, p[1])
             if p == ["stop"]:

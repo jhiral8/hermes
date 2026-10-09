@@ -317,6 +317,33 @@ class App:
         self.audit(user, "pause_agent" if paused else "resume_agent", {"agent": agent_id})
         return {"ok": True}
 
+    MOVABLE = ("backlog", "todo", "in_progress", "blocked", "in_review", "done", "cancelled")
+
+    def set_status(self, user, issue_id, body):
+        status = body.get("status")
+        if status not in self.MOVABLE:
+            raise ActionError(400, "Not a task status.")
+        try:
+            self._need(self.board, "Paperclip").set_issue_status(issue_id, status)
+        except ERRORS as e:
+            msg = "an agent is working on it right now; stop its run first or wait" if "409" in str(e) else str(e)
+            raise ActionError(502, f"Not moved: {msg}")
+        self._forget()
+        self.audit(user, "task_status", {"task": issue_id, "status": status})
+        return {"ok": True}
+
+    def comment(self, user, issue_id, body):
+        text = str(body.get("body") or "").strip()
+        if not text or len(text) > 8000:
+            raise ActionError(400, "A comment needs some text, up to 8000 characters.")
+        try:
+            self._need(self.board, "Paperclip").add_comment(issue_id, text)
+        except ERRORS as e:
+            raise ActionError(502, f"Comment not added: {e}")
+        self._forget()
+        self.audit(user, "task_comment", {"task": issue_id, "chars": len(text)})
+        return {"ok": True}
+
     def cancel_run(self, user, run_id):
         try:
             self._need(self.board, "Paperclip").cancel_run(run_id)

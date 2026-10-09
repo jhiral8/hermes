@@ -313,5 +313,11 @@ class Paperclip:
     def set_agent_paused(self, agent_id, paused):
         self._call("POST", f"/agents/{agent_id}/{'pause' if paused else 'resume'}", {})
 
+    def set_issue_status(self, issue_id, status):
+        self._call("PATCH", f"/issues/{_ref(issue_id)}", {"status": status})
+
+    def add_comment(self, issue_id, body):
+        self._call("POST", f"/issues/{_ref(issue_id)}/comments", {"body": body})
+
     def cancel_run(self, run_id):
         self._call("POST", f"/heartbeat-runs/{run_id}/cancel", {})

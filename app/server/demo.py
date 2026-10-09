@@ -125,6 +125,17 @@ class Demo:
                 return
         raise KeyError(agent_id)
 
+    def set_issue_status(self, issue_id, status):
+        for i in self.issues_:
+            if i["id"] == issue_id:
+                i["status"], i["updated"] = status, _iso(0)
+                return
+        raise KeyError(issue_id)
+
+    def add_comment(self, issue_id, body):
+        if not any(i["id"] == issue_id for i in self.issues_):
+            raise KeyError(issue_id)
+
     def cancel_run(self, run_id):
         for i in self.issues_:
             if i.get("run_id") == run_id:

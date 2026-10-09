@@ -106,6 +106,26 @@ class Http(unittest.TestCase):
         self.assertEqual(self.get(base, "/api/agents/nobody")[0], 404)
         self.assertEqual(self.get(base, "/api/work/a.b")[0], 404)  # not a detail route at all
 
+    def post(self, base, path, body, header=True):
+        h = {"Tailscale-User-Login": LOGIN, "Content-Type": "application/json", "Origin": base}
+        if header:
+            h["X-Hermes-Action"] = "1"
+        r = urllib.request.Request(base + path, data=json.dumps(body).encode(), headers=h, method="POST")
+        try:
+            with urllib.request.urlopen(r) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_move_and_comment(self):
+        base = self.serve()
+        self.assertEqual(self.post(base, "/api/work/i1/status", {"status": "in_review"}), 200)
+        self.assertEqual(self.get(base, "/api/work/i1")[1]["item"]["data"]["status"], "in_review")
+        self.assertEqual(self.post(base, "/api/work/i1/status", {"status": "deleted"}), 400)
+        self.assertEqual(self.post(base, "/api/work/i1/comment", {"body": "Looks good"}), 200)
+        self.assertEqual(self.post(base, "/api/work/i1/comment", {"body": " "}), 400)
+        self.assertEqual(self.post(base, "/api/work/i1/status", {"status": "done"}, header=False), 403)
+
 
 if __name__ == "__main__":
     unittest.main()

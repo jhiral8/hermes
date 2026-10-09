@@ -307,8 +307,9 @@ async function screenWork(sub) {
       <label class="sr" for="wf-agent">Agent</label><select class="inp" id="wf-agent" style="width:auto" data-change="workAgent"><option value="all">Any agent</option>${agents.map((a) => `<option value="${esc(a.id)}"${S.workAgent === a.id ? " selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
       <label class="sr" for="wf-st">Status</label><select class="inp" id="wf-st" style="width:auto" data-change="workStatus"><option value="all">Any status</option>${statuses.map(([v, t]) => `<option value="${v}"${S.workStatus === v ? " selected" : ""}>${t}</option>`).join("")}</select>
     </div>
-    ${S.workView === "board" ? `<div class="board">${[["To do", ["backlog", "todo"]], ["In progress", ["in_progress"]], ["Blocked", ["blocked"]], ["In review", ["in_review"]], ["Done", ["done"]]].map(([t, sts]) => { const col = issues.filter((i) => sts.includes(i.status)); return `<div class="col"><h3>${t} · ${col.length}</h3>${col.map((i) => `<a class="tcard" href="#work/${esc(i.id)}"><span class="mono xs muted">${esc(i.ref || "")}</span>${i.running ? ' <span class="pulse" aria-hidden="true"></span>' : ""}<br><b style="font-weight:600">${esc(i.title)}</b><br><span class="xs muted">${esc(i.agent || "Unassigned")}${i.project ? " · " + esc(i.project) : ""}</span></a>`).join("") || '<span class="xs muted">None</span>'}</div>`; }).join("")}</div>`
+    ${S.workView === "board" ? `<div class="board">${[["To do", ["backlog", "todo"]], ["In progress", ["in_progress"]], ["Blocked", ["blocked"]], ["In review", ["in_review"]], ["Done", ["done"]]].map(([t, sts]) => { const col = issues.filter((i) => sts.includes(i.status)); return `<div class="col" data-status="${sts[sts.length - 1]}"><h3>${t} · ${col.length}</h3>${col.map((i) => `<a class="tcard" data-id="${esc(i.id)}" href="#work/${esc(i.id)}"><span class="mono xs muted">${esc(i.ref || "")}</span>${i.running ? ' <span class="pulse" aria-hidden="true"></span>' : ""}<br><b style="font-weight:600">${esc(i.title)}</b><br><span class="xs muted">${esc(i.agent || "Unassigned")}${i.project ? " · " + esc(i.project) : ""}</span></a>`).join("") || '<span class="xs muted">None</span>'}</div>`; }).join("")}</div>`
       : [...groups].map(([name, items]) => `<section class="panel"><div class="panel-h"><div><h2>${esc(name)}</h2></div></div><div class="list">${items.map(issueRow).join("")}</div></section>`).join("")}
+    ${S.workView === "board" && window.Sortable ? `<p class="xs muted">Drag a card to another column to change its status in Paperclip.</p>` : ""}
     ${w && w.ok && !issues.length ? `<div class="empty"><h3>No tasks here</h3><p class="small">Change the filters, or create a task.</p></div>` : ""}
   </div>`;
 }
@@ -339,10 +340,10 @@ async function screenTask(id) {
   const needs = i.status === "in_review";
   return `${backBtn("#work", "Work")}
   <div class="ph"><div class="ph-t"><div class="eyebrow"><span class="mono">${esc(i.ref || "")}</span>${i.project ? " · " + esc(i.project) : ""} · ${esc(i.agent || "Unassigned")} · priority ${esc(i.priority || "medium")}</div><h1>${esc(i.title)}</h1></div>
-    <div class="ph-a">${live ? `<button type="button" class="btn danger" data-act="cancelRun" data-arg="${esc(live.id)}">${ic("stop")}Stop run</button>` : ""}${boardBtn()}</div></div>
+    <div class="ph-a"><button type="button" class="btn" data-act="taskComment" data-arg="${esc(i.id)}">Comment</button>${needs ? `<button type="button" class="btn" data-act="taskRevise" data-arg="${esc(i.id)}">Ask for changes</button><button type="button" class="btn primary" data-act="taskAccept" data-arg="${esc(i.id)}">Accept</button>` : ""}${live ? `<button type="button" class="btn danger" data-act="cancelRun" data-arg="${esc(live.id)}">${ic("stop")}Stop run</button>` : ""}${boardBtn()}</div></div>
   <div class="stack s24">
     <div class="row-flex">${badge(ISSUE_BADGE[i.status], i.status_text)}${needs ? badge("warn", "Needs you") : ""}${live ? badge("info", "Run running") : ""}</div>
-    ${needs ? `<div class="notice info" role="status">${ic("info")}<div><b>Waiting for your review.</b> Accept it or ask for changes on the board.</div></div>` : ""}
+    ${needs ? `<div class="notice info" role="status">${ic("info")}<div><b>Waiting for your review.</b> Accept it, or ask for changes and it goes back to the agent.</div></div>` : ""}
     <div class="cols"><div class="stack s24">
       <section class="panel"><h2 style="margin-bottom:10px">Brief</h2>${i.description ? `<div class="md">${md(i.description)}</div>` : `<p class="small muted">No description.</p>`}</section>
       <section class="panel"><h2 style="margin-bottom:10px">Activity</h2>${i.comments.length ? `<ul class="timeline">${i.comments.slice().reverse().map((c) => `<li><span class="when">${esc(when(c.created))} · ${esc(c.by)}</span><div class="md small" style="margin-top:2px">${md(c.body)}</div></li>`).join("")}</ul>` : `<p class="small muted">No comments yet.</p>`}</section>
@@ -534,6 +535,9 @@ const CREDITS = [
   ["changedetection.io", "https://github.com/dgtlmoon/changedetection.io", "Release watcher", "Apache-2.0"],
   ["ZXing for the browser", "https://github.com/zxing-js/browser", "Barcode reading in the camera view (bundled)", "MIT"],
   ["Geist and Geist Mono", "https://github.com/vercel/geist-font", "Typefaces (bundled)", "SIL OFL 1.1"],
+  ["DOMPurify", "https://github.com/cure53/DOMPurify", "Second safety filter on text agents write (bundled)", "Apache-2.0 or MPL-2.0"],
+  ["Fuse.js", "https://github.com/krisk/Fuse", "Typo-tolerant search (bundled)", "Apache-2.0"],
+  ["SortableJS", "https://github.com/SortableJS/Sortable", "Drag and drop on the Work board (bundled)", "MIT"],
   ["Open Food Facts", "https://world.openfoodfacts.org", "Product data for barcode lookup", "ODbL"],
 ];
 
@@ -739,7 +743,19 @@ function md(text) {
     else out.push(`<p>${lines.map(inline).join("<br>")}</p>`);
   }
   if (code.length) out.push(`<pre><code>${esc(code.join("\n\n").replace(/^```[^\n]*\n?/, ""))}</code></pre>`);
-  return out.join("");
+  return clean(out.join(""));
+}
+
+// Second safety layer for text agents write: everything is escaped above, and
+// DOMPurify then drops anything that still isn't plain formatting.
+function clean(html) {
+  const P = window.DOMPurify;
+  if (!P) return html;
+  if (!P.hermesHooked) {
+    P.addHook("afterSanitizeAttributes", (n) => { if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); } });
+    P.hermesHooked = true;
+  }
+  return P.sanitize(html, { ALLOWED_URI_REGEXP: /^https?:/i });
 }
 
 function chatTools(tools) {
@@ -924,6 +940,25 @@ async function chatSend() {
   chatScroll();
 }
 
+/* ---------- Work board: drag a card to change its status ---------- */
+
+function wireBoard() {
+  if (!window.Sortable) return;
+  document.querySelectorAll(".board .col").forEach((col) => Sortable.create(col, {
+    group: "board", draggable: ".tcard", animation: 150, delay: 150, delayOnTouchOnly: true,
+    onEnd: async (ev) => {
+      if (ev.from === ev.to) return;
+      const id = ev.item.dataset.id, status = ev.to.dataset.status;
+      try {
+        await api(`/api/work/${encodeURIComponent(id)}/status`, { body: { status } });
+        toast(`Moved to ${ISSUE_TEXT[status]}.`);
+        S.cache.work = null;
+      } catch (e) { toast(e.message); }
+      render(); // redraw from the board's answer, so a refused move snaps back
+    },
+  }));
+}
+
 /* ---------- appearance, account menu and search ---------- */
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -976,7 +1011,10 @@ function paletteIndex() {
 
 function paletteResults(q) {
   q = (q || "").trim().toLowerCase();
-  const all = paletteIndex().filter((x) => !q || `${x.label} ${x.sub} ${x.group}`.toLowerCase().includes(q));
+  const idx = paletteIndex();
+  // Typo-tolerant when Fuse.js is loaded ("aprovals" still finds Approvals); plain matching otherwise.
+  const all = !q ? idx : window.Fuse ? new Fuse(idx, { keys: [{ name: "label", weight: 3 }, "sub", "group"], threshold: 0.35, ignoreLocation: true }).search(q).map((r) => r.item)
+    : idx.filter((x) => `${x.label} ${x.sub} ${x.group}`.toLowerCase().includes(q));
   const groups = new Map();
   all.forEach((x) => { if (!groups.has(x.group)) groups.set(x.group, []); groups.get(x.group).push(x); });
   let i = 0;
@@ -1056,6 +1094,27 @@ async function act(name, arg, el) {
     }
     if (name === "planEvent") return openPlanEvent(arg);
     if (name === "palette") return openPalette();
+    if (name === "taskComment" || name === "taskRevise") {
+      const rev = name === "taskRevise";
+      return modal(rev ? "Ask for changes" : "Comment", `<div class="field"><label for="tc-t">${rev ? "What should change?" : "Comment"}</label><textarea class="inp" id="tc-t" rows="5" maxlength="8000" autofocus></textarea></div><p class="xs muted">${rev ? "Added as a comment, and the task moves back to In progress." : "Added to the task in Paperclip. The agent sees it on its next run."}</p>`,
+        `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="${rev ? "taskReviseGo" : "taskCommentGo"}" data-arg="${esc(arg)}">${rev ? "Send back" : "Add comment"}</button>`);
+    }
+    if (name === "taskCommentGo" || name === "taskReviseGo") {
+      const text = ($("#tc-t") || {}).value || "";
+      if (!text.trim()) return toast("Write something first.");
+      busy(true);
+      await api(`/api/work/${encodeURIComponent(arg)}/comment`, { body: { body: text } });
+      if (name === "taskReviseGo") await api(`/api/work/${encodeURIComponent(arg)}/status`, { body: { status: "in_progress" } });
+      closeModal();
+      toast(name === "taskReviseGo" ? "Sent back to the agent." : "Comment added.");
+      return render();
+    }
+    if (name === "taskAccept") {
+      busy(true);
+      await api(`/api/work/${encodeURIComponent(arg)}/status`, { body: { status: "done" } });
+      toast("Accepted. Marked Done.");
+      return render();
+    }
     if (name === "workView") { S.workView = arg; try { localStorage.setItem("hermes:workView", arg); } catch (_) { /* private mode */ } return render(); }
     if (name === "acctMenu") return openAcctMenu();
     if (name === "theme") { setTheme(arg); return openAcctMenu(); }
@@ -1780,6 +1839,7 @@ async function render() {
   renderShell(route);
   $("#main").innerHTML = html;
   if (area === "health" && rest[0] === "scan") startScan();
+  if (area === "work" && !rest.length && S.workView === "board") wireBoard();
   if (area === "max") {
     chatScroll();
     // An answer still running on the server (phone slept, page reloaded): check back.
