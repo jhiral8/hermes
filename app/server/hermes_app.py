@@ -39,6 +39,7 @@ from health import Health, Refused
 from health_log import HealthLog
 from strategy import Strategy
 from mealplan import MealPlan, ask_max
+from pantry import Pantry
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
@@ -338,7 +339,18 @@ def _today_london():
     return Health({}).today()
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None):
+def make_pantry(cfg, app):
+    """The pantry, batches and shopping list (in memory in sample-data mode)."""
+    if app.demo:
+        return Pantry(None)
+    path = (cfg.get("health") or {}).get("pantry_file")
+    if not path:
+        near = (cfg.get("foods") or {}).get("store_path") or cfg.get("audit_log")
+        path = str(Path(near).with_name("pantry.json")) if near else None
+    return Pantry(path)
+
+
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None, pantry=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -363,6 +375,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         strategy = make_strategy(cfg, app, health)
     if mealplan is None:
         mealplan = make_mealplan(cfg, app, health, hlog, strategy)
+    if pantry is None:
+        pantry = make_pantry(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -496,6 +510,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     result = self._plan_post(user, parts[3], body)
                 elif parts[:3] == ["api", "health", "log"] and len(parts) == 4:
                     result = self._health_log(user, parts[3], body)
+                elif parts[:3] == ["api", "health", "pantry"] and len(parts) == 4:
+                    result = self._pantry_post(user, parts[3], body)
                 else:
                     result = self._dispatch(user, parts, body)
             except (ActionError, ChatError) as e:
@@ -630,6 +646,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     except SourceError as e:
                         self._json(503, {"ok": False, "error": str(e), **app.meta()})
                         return
+                elif what == "pantry":
+                    out = pantry.view()
                 elif what in ("plan", "recipes"):
                     if mealplan is None:
                         self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
@@ -737,6 +755,23 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             out = self._strategy_do(lambda: fn(body))
             detail = {"choice": body.get("action")} if kind == "checkin" else {}
             app.audit(user, "health_" + kind, detail)
+            return {"ok": True, **out, **app.meta()}
+
+        def _pantry_post(self, user, kind, body):
+            """Pantry, batches and the shopping list. The app's own lists: nothing goes to a model or another app."""
+            fn = {"item-add": "add_item", "item-set": "set_item", "item-use": "use_item", "item-remove": "remove_item",
+                  "batch-add": "add_batch", "batch-use": "use_batch", "batch-remove": "remove_batch",
+                  "shop-add": "shop_add", "shop-tick": "shop_tick", "shop-remove": "shop_remove",
+                  "shop-clear": "shop_clear_done"}.get(kind)
+            if fn is None:
+                return None
+            try:
+                out = getattr(pantry, fn)(body)
+            except ValueError as e:
+                raise ActionError(400, str(e))
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            app.audit(user, "health_pantry_" + kind.replace("-", "_"), {})
             return {"ok": True, **out, **app.meta()}
 
         def _plan_post(self, user, kind, body):

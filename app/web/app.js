@@ -1495,7 +1495,7 @@ async function screenHealth(rest) {
   const sub = HEALTH_TABS.some(([k]) => k === rest[0]) ? rest[0] : "food";
   if (sub === "food") return screenFood(isoDay(rest[1]));
   if (sub === "train") return rest[1] === "session" ? screenSession(rest[2]) : screenTrain();
-  if (sub === "meals") return rest[1] === "recipes" ? screenMeals() : screenMealPlan(rest[1] === "plan" ? isoDay(rest[2]) : null);
+  if (sub === "meals") return rest[1] === "pantry" ? screenPantry() : rest[1] === "recipes" ? screenMeals() : screenMealPlan(rest[1] === "plan" ? isoDay(rest[2]) : null);
   if (sub === "strategy") return screenStrategy();
   return screenProgress(rest[1] === "7" ? 7 : 14);
 }
@@ -2479,7 +2479,7 @@ document.addEventListener("change", (e) => {
 
 const PLAN_MEALS = [["breakfast", "Breakfast"], ["lunch", "Lunch"], ["dinner", "Dinner"], ["snack", "Snacks"]];
 const SLOT_ST = { planned: "Planned", logged: "Logged", skipped: "Skipped" };
-const mealsSub = (cur) => `<nav class="tabs sub" aria-label="Meals & Shop">${[["meals", "Meal plan"], ["meals/recipes", "Recipes & shopping"]].map(([k, t]) => `<a href="#health/${k}"${k === cur ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>`;
+const mealsSub = (cur) => `<nav class="tabs sub" aria-label="Meals & Shop">${[["meals", "Meal plan"], ["meals/recipes", "Recipes & shopping"], ["meals/pantry", "Pantry & shopping"]].map(([k, t]) => `<a href="#health/${k}"${k === cur ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>`;
 const shortDay = (iso) => dayName(iso).split(" ").slice(1).join(" ");
 
 async function screenMealPlan(week) {
@@ -3026,4 +3026,124 @@ Object.assign(STRAT_ACTS, {
       `<button type="button" class="btn ghost" data-act="close">Keep going</button><button type="button" class="btn primary" data-act="sesEnd">Finish</button>`);
   },
   sesEnd: () => { S.ses = null; S.rest = null; clearInterval(S.restT); sesSave(); closeModal(); delete S.cache["health:train"]; toast("Session finished. Your sets are in LiftTrace."); location.hash = "#health/train"; },
+});
+
+/* ---------- Pantry, batches and shopping (the app's own lists) ----------
+   Kept on the server by the app: nothing goes to NutriTrace, CookTrace or Max.
+   Low items suggest shopping; what Craig ticks as bought goes back into the pantry. */
+
+async function screenPantry() {
+  let d;
+  try { d = await api("/api/health/pantry"); }
+  catch (e) { return healthHead("meals", "Meals & Shop") + mealsSub("meals/pantry") + notConnected("Health", e.message); }
+  S.pantryView = d;
+  const opts = (list, cur) => list.map((x) => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
+  const unitSel = (id, cur = "each") => `<select class="inp" id="${id}" style="width:auto" aria-label="Unit">${opts(d.units, cur)}</select>`;
+  const placeSel = (id, cur = "cupboard") => `<select class="inp" id="${id}" style="width:auto" aria-label="Where it's kept">${opts(d.places, cur)}</select>`;
+
+  const items = d.items.length ? d.items.map((x) => `<div class="li${x.low ? " warn" : ""}"><span class="main"><span class="t">${esc(x.name)}</span>
+      <span class="s">${x.qty == null ? "Amount not set" : esc(x.qty) + " " + esc(x.unit)} · ${esc(x.place)}${x.low ? " · Running low" : ""}</span></span>
+      <span class="r"><input class="inp num" inputmode="decimal" id="pu-${x.id}" aria-label="Amount used of ${esc(x.name)}" style="width:80px" placeholder="Amount">
+      <button type="button" class="btn ghost sm" data-act="pantryUse" data-arg="${x.id}">Used</button>
+      <button type="button" class="btn ghost sm" data-act="pantryRemove" data-arg="${x.id}">Remove</button></span></div>`).join("")
+    : `<p class="muted">Nothing in the pantry yet. Add what you have below.</p>`;
+
+  const batches = d.batches.length ? d.batches.map((b) => `<div class="li${b.left <= 0 ? " muted" : ""}${b.days_left != null && b.days_left <= 1 && b.left > 0 ? " warn" : ""}"><span class="main"><span class="t">${esc(b.name)}</span>
+      <span class="s">${esc(b.left)} of ${esc(b.portions)} portion${b.portions === 1 ? "" : "s"} left · ${esc(b.place)}${b.use_by ? ` · use by ${esc(dayName(b.use_by))}` : ""}</span></span>
+      <span class="r"><input class="inp num" inputmode="decimal" id="pb-${b.id}" aria-label="Portions eaten of ${esc(b.name)}" style="width:80px" value="1">
+      <button type="button" class="btn ghost sm" data-act="batchUse" data-arg="${b.id}" ${b.left <= 0 ? "disabled" : ""}>Eat</button>
+      <button type="button" class="btn ghost sm" data-act="batchRemove" data-arg="${b.id}">Remove</button></span></div>`).join("")
+    : `<p class="muted">No cooked batches yet.</p>`;
+
+  const suggest = d.suggest.length ? `<div class="panel-sub"><p class="small"><strong>Running low:</strong> ${d.suggest.map((s) => esc(s.name)).join(", ")}</p>
+      <div class="btns">${d.suggest.map((s) => `<button type="button" class="btn ghost sm" data-act="shopFromLow" data-arg="${s.id}">Add ${esc(s.name)}</button>`).join("")}</div></div>` : "";
+
+  const shop = d.shop.length ? d.shop.map((s) => `<div class="li${s.done ? " muted" : ""}"><span class="main"><span class="t${s.done ? " done" : ""}">${esc(s.name)}</span>
+      <span class="s">${s.qty == null ? "" : esc(s.qty) + " " + esc(s.unit)}${s.done ? " · bought" : ""}</span></span>
+      <span class="r">${s.done ? `<span class="badge">Bought</span>` : `<button type="button" class="btn primary sm" data-act="shopTick" data-arg="${s.id}">Bought</button>`}
+      <button type="button" class="btn ghost sm" data-act="shopRemove" data-arg="${s.id}">Remove</button></span></div>`).join("")
+    : `<p class="muted">The list is empty.</p>`;
+  const hasDone = d.shop.some((s) => s.done);
+
+  return healthHead("meals", "Meals & Shop", "", "Your pantry, cooked batches and shopping list. Kept by the app only.") + mealsSub("meals/pantry") + `
+    <section class="panel"><div class="panel-h"><div><h2>Pantry</h2><p class="small muted">${d.items.length} item${d.items.length === 1 ? "" : "s"}</p></div></div>
+      <div class="list">${items}</div>
+      <div class="btns" style="margin-top:12px">
+        <input class="inp" id="pa-name" placeholder="Name, e.g. Rice" aria-label="Name" required>
+        <input class="inp num" inputmode="decimal" id="pa-qty" placeholder="Amount" aria-label="Amount" style="width:100px">
+        ${unitSel("pa-unit")} ${placeSel("pa-place")}
+        <input class="inp num" inputmode="decimal" id="pa-low" placeholder="Low at" aria-label="Running low at" style="width:100px">
+        <button type="button" class="btn primary" data-act="pantryAdd">Add to pantry</button>
+      </div></section>
+
+    <section class="panel"><div class="panel-h"><div><h2>Cooked batches</h2><p class="small muted">Portions you've made, in the fridge or freezer</p></div></div>
+      <div class="list">${batches}</div>
+      <div class="btns" style="margin-top:12px">
+        <input class="inp" id="ba-name" placeholder="What it is, e.g. Chilli" aria-label="Batch name">
+        <input class="inp num" inputmode="decimal" id="ba-portions" placeholder="Portions" aria-label="Portions" style="width:110px">
+        ${placeSel("ba-place", "fridge")}
+        <input class="inp" type="date" id="ba-use" aria-label="Use by">
+        <button type="button" class="btn primary" data-act="batchAdd">Add batch</button>
+      </div></section>
+
+    <section class="panel"><div class="panel-h"><div><h2>Shopping list</h2><p class="small muted">Tick what you've bought and it goes back into the pantry</p></div>
+      ${hasDone ? `<div class="r"><button type="button" class="btn ghost sm" data-act="shopClear">Clear bought</button></div>` : ""}</div>
+      ${suggest}
+      <div class="list">${shop}</div>
+      <div class="btns" style="margin-top:12px">
+        <input class="inp" id="sa-name" placeholder="Add an item" aria-label="Item">
+        <input class="inp num" inputmode="decimal" id="sa-qty" placeholder="Amount" aria-label="Amount" style="width:100px">
+        ${unitSel("sa-unit")}
+        <button type="button" class="btn primary" data-act="shopAdd">Add</button>
+      </div></section>`;
+}
+
+const pantryVal = (id) => (document.getElementById(id) || {}).value || "";
+
+Object.assign(STRAT_ACTS, {
+  pantryAdd: async () => {
+    const name = pantryVal("pa-name").trim();
+    if (!name) return toast("Type what it is first.");
+    await api("/api/health/pantry/item-add", { body: { name, qty: pantryVal("pa-qty"), unit: pantryVal("pa-unit"), place: pantryVal("pa-place"), low: pantryVal("pa-low") } });
+    toast("Added to the pantry."); render();
+  },
+  pantryUse: async (id) => {
+    const amount = pantryVal(`pu-${id}`).trim();
+    if (!amount) return toast("Type how much you used.");
+    await api("/api/health/pantry/item-use", { body: { id, amount } });
+    render();
+  },
+  pantryRemove: async (id) => {
+    if (!confirm("Remove this from the pantry?")) return;
+    await api("/api/health/pantry/item-remove", { body: { id } }); render();
+  },
+  batchAdd: async () => {
+    const name = pantryVal("ba-name").trim();
+    if (!name) return toast("Name the batch first.");
+    await api("/api/health/pantry/batch-add", { body: { name, portions: pantryVal("ba-portions"), place: pantryVal("ba-place"), use_by: pantryVal("ba-use") || null } });
+    toast("Batch added."); render();
+  },
+  batchUse: async (id) => {
+    await api("/api/health/pantry/batch-use", { body: { id, portions: pantryVal(`pb-${id}`) || 1 } });
+    render();
+  },
+  batchRemove: async (id) => {
+    if (!confirm("Remove this batch?")) return;
+    await api("/api/health/pantry/batch-remove", { body: { id } }); render();
+  },
+  shopFromLow: async (pantryId) => {
+    const s = ((S.pantryView || {}).suggest || []).find((x) => x.id === pantryId);
+    if (!s) return render();
+    await api("/api/health/pantry/shop-add", { body: { name: s.name, unit: s.unit, pantry_id: s.id } });
+    render();
+  },
+  shopAdd: async () => {
+    const name = pantryVal("sa-name").trim();
+    if (!name) return toast("Type what to buy.");
+    await api("/api/health/pantry/shop-add", { body: { name, qty: pantryVal("sa-qty"), unit: pantryVal("sa-unit") } });
+    render();
+  },
+  shopTick: async (id) => { await api("/api/health/pantry/shop-tick", { body: { id } }); render(); },
+  shopRemove: async (id) => { await api("/api/health/pantry/shop-remove", { body: { id } }); render(); },
+  shopClear: async () => { await api("/api/health/pantry/shop-clear", { body: {} }); render(); },
 });
