@@ -130,6 +130,60 @@ class Demo:
             if i.get("run_id") == run_id:
                 i["running"] = False
 
+    # one record
+    def issue_detail(self, issue_id):
+        i = next((x for x in self.issues_ if x["id"] == issue_id or x["ref"] == issue_id), None)
+        if not i:
+            raise KeyError(issue_id)
+        i = copy.deepcopy(i)
+        running = i.get("running")
+        i.update({"description": "Build the screen from the mockup: pending and history, filters, and a detail pane. "
+                                 "Email sends stay on the broker's fingerprint page.",
+                  "status_text": {"in_progress": "In progress", "in_review": "In review", "todo": "To do", "done": "Done"}.get(i["status"], i["status"]),
+                  "priority": "medium", "created": _iso(60 * 26),
+                  "comments": [{"id": "c1", "body": "Picked this up. Starting with the list.", "agent_id": i["agent_id"], "by_user": False, "created": _iso(90)},
+                               {"id": "c2", "body": "Keep the broker approvals read-only here.", "agent_id": None, "by_user": True, "created": _iso(60)}],
+                  "runs": [{"id": i.get("run_id") or "run-" + i["ref"][-2:], "status": "running" if running else "succeeded",
+                            "status_text": "Running" if running else "Finished", "agent_id": i["agent_id"], "issue_id": i["id"],
+                            "source": "assignment", "trigger": None, "created": _iso(40), "started": _iso(40),
+                            "finished": None if running else _iso(20), "error": None,
+                            "usage": {"input_tokens": 18400, "output_tokens": 2100, "cost_usd": None if running else 0.12}}]})
+        return i
+
+    def run_detail(self, run_id):
+        for i in self.issues_:
+            d = self.issue_detail(i["id"])
+            for r in d["runs"]:
+                if r["id"] == run_id:
+                    r["events"] = [{"seq": 1, "type": "lifecycle", "level": "info", "message": "Run started", "at": r["started"]},
+                                   {"seq": 2, "type": "log", "level": "info", "message": "Read the task and the mockup notes", "at": _iso(38)},
+                                   {"seq": 3, "type": "log", "level": "info", "message": "Wrote the list view and filters", "at": _iso(30)}]
+                    if r["finished"]:
+                        r["events"].append({"seq": 4, "type": "lifecycle", "level": "info", "message": "Run finished", "at": r["finished"]})
+                    return r
+        raise KeyError(run_id)
+
+    def agent_detail(self, agent_id):
+        a = next((x for x in self.agents() if x["id"] == agent_id), None)
+        if not a:
+            raise KeyError(agent_id)
+        a.update({"role": "general", "adapter": {"a-max": "hermes_local", "a-codex": "codex_local"}.get(agent_id, "claude_local"),
+                  "reports_to": None, "capabilities": a["title"], "last_heartbeat": _iso(5), "created": _iso(60 * 24 * 3),
+                  "runs": [r for i in self.issues_ if i["agent_id"] == agent_id for r in self.issue_detail(i["id"])["runs"]]})
+        return a
+
+    def routine_detail(self, routine_id):
+        r = next((x for x in self.routines_ if x["id"] == routine_id), None)
+        if not r:
+            raise KeyError(routine_id)
+        r = copy.deepcopy(r)
+        return {"id": r["id"], "title": r["title"], "description": "Summarise the week's server alerts, costs and test results.",
+                "agent_id": r["agent_id"], "status": r["status"],
+                "triggers": [{"kind": "schedule", "label": r["schedule"], "timezone": r["timezone"], "enabled": r["status"] == "active",
+                              "next_run": r["next_run"], "last_run": r["last_run"], "last_result": r["last_result"]}],
+                "runs": [{"id": "rr1", "status": "completed", "source": "schedule", "triggered": r["last_run"],
+                          "completed": r["last_run"], "issue_id": "i4", "failure": None}] if r["last_run"] else []}
+
     # broker
     def pending(self):
         return copy.deepcopy(self.broker_)

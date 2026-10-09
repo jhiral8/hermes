@@ -277,9 +277,10 @@ function statusList(items) {
 }
 
 async function screenWork(sub) {
+  if (sub && sub.startsWith("run/")) return screenRun(sub.slice(4));
+  if (sub) return screenTask(sub);
   const d = await load("work", "/api/work");
   const w = d && d.work;
-  if (sub) return screenTask(w, sub);
   let issues = (w && w.ok && w.data.issues) || [];
   const agents = (w && w.ok && w.data.agents) || [];
   const needs = issues.filter((i) => i.needs_you).length;
@@ -308,15 +309,99 @@ async function screenWork(sub) {
   </div>`;
 }
 
-function screenTask(w, id) {
-  const i = w && w.ok && w.data.issues.find((x) => x.id === id);
-  if (!i) return `<a class="btn ghost sm" href="#work">${ic("back")}Work</a><div class="empty" style="margin-top:16px"><h3>Task not found</h3><p class="small">It may have moved off the recent list.</p></div>`;
-  return `
-  <a class="btn ghost sm tab-back" href="#work" style="margin-bottom:12px">${ic("back")}Work</a>
-  <div class="ph"><div class="ph-t"><div class="eyebrow"><span class="mono">${esc(i.ref || "")}</span>${i.project ? " · " + esc(i.project) : ""}</div><h1>${esc(i.title)}</h1>
-    <div class="row-flex" style="margin-top:10px">${badge(ISSUE_BADGE[i.status], i.status_text || ISSUE_TEXT[i.status] || i.status)}${i.running ? badge("info", "Run running") : ""}</div></div></div>
-  <section class="panel"><dl class="kv"><dt>Agent</dt><dd>${esc(i.agent || "Unassigned")}</dd><dt>Updated</dt><dd>${esc(when(i.updated))}</dd><dt>Priority</dt><dd>${esc(i.priority || "medium")}</dd></dl>
-  <div class="btns" style="margin-top:14px">${i.running && i.run_id ? `<button type="button" class="btn danger" data-act="cancelRun" data-arg="${esc(i.run_id)}">${ic("stop")}Stop run</button>` : ""}${S.meta.board_url ? `<a class="btn" href="${esc(S.meta.board_url)}" target="_blank" rel="noopener">Open in Paperclip</a>` : ""}</div></section>`;
+const RUN_BADGE = { queued: "", running: "info", succeeded: "ok", completed: "ok", failed: "err", cancelled: "", timed_out: "warn", cancelling: "warn" };
+const runBadge = (r) => badge(RUN_BADGE[r.status], r.status_text || r.status || "Unknown");
+const runCost = (u) => (u && u.cost_usd != null ? usd(u.cost_usd) : "not reported");
+const runTokens = (u) => (u && (u.input_tokens != null || u.output_tokens != null) ? `${fmtN(u.input_tokens)} in · ${fmtN(u.output_tokens)} out` : "—");
+const backBtn = (href, label) => `<a class="btn ghost sm tab-back" href="${href}" style="margin-bottom:12px">${ic("back")}${esc(label)}</a>`;
+const boardBtn = (label = "Open in Paperclip") => (S.meta.board_url ? `<a class="btn ghost" href="${esc(S.meta.board_url)}" target="_blank" rel="noopener">${label} ${ic("ext", 15)}</a>` : "");
+const runRow = (r, sub) => `<a class="li" href="#work/run/${esc(r.id)}"><span class="main"><span class="t mono">${esc(String(r.id).slice(0, 8))}</span><span class="s">${esc(sub || [r.agent, when(r.started || r.created)].filter(Boolean).join(" · "))}</span></span><span class="end">${runBadge(r)}</span></a>`;
+
+// One record from the board: "not found" and "not connected" read differently.
+async function boardItem(path, back, label) {
+  let d;
+  try { d = await api(path); } catch (e) { d = { item: { ok: false, error: e.message } }; }
+  if (d && "demo" in d) S.meta = { ...S.meta, demo: d.demo, board_url: d.board_url };
+  const it = d.item || {};
+  if (it.ok) return { data: it.data };
+  const missing = /not found|answered 404/i.test(it.error || "");
+  return { html: backBtn(back, label) + (missing ? `<div class="empty"><h3>Not found</h3><p class="small">It may have been removed from the board.</p></div>` : notConnected("The Paperclip board", it.error)) };
+}
+
+async function screenTask(id) {
+  const { data: i, html } = await boardItem(`/api/work/${encodeURIComponent(id)}`, "#work", "Work");
+  if (!i) return html;
+  const live = i.runs.find((r) => ["running", "queued"].includes(r.status));
+  const needs = i.status === "in_review";
+  return `${backBtn("#work", "Work")}
+  <div class="ph"><div class="ph-t"><div class="eyebrow"><span class="mono">${esc(i.ref || "")}</span>${i.project ? " · " + esc(i.project) : ""} · ${esc(i.agent || "Unassigned")} · priority ${esc(i.priority || "medium")}</div><h1>${esc(i.title)}</h1></div>
+    <div class="ph-a">${live ? `<button type="button" class="btn danger" data-act="cancelRun" data-arg="${esc(live.id)}">${ic("stop")}Stop run</button>` : ""}${boardBtn()}</div></div>
+  <div class="stack s24">
+    <div class="row-flex">${badge(ISSUE_BADGE[i.status], i.status_text)}${needs ? badge("warn", "Needs you") : ""}${live ? badge("info", "Run running") : ""}</div>
+    ${needs ? `<div class="notice info" role="status">${ic("info")}<div><b>Waiting for your review.</b> Accept it or ask for changes on the board.</div></div>` : ""}
+    <div class="cols"><div class="stack s24">
+      <section class="panel"><h2 style="margin-bottom:10px">Brief</h2>${i.description ? `<div class="md">${md(i.description)}</div>` : `<p class="small muted">No description.</p>`}</section>
+      <section class="panel"><h2 style="margin-bottom:10px">Activity</h2>${i.comments.length ? `<ul class="timeline">${i.comments.slice().reverse().map((c) => `<li><span class="when">${esc(when(c.created))} · ${esc(c.by)}</span><div class="md small" style="margin-top:2px">${md(c.body)}</div></li>`).join("")}</ul>` : `<p class="small muted">No comments yet.</p>`}</section>
+    </div><div class="stack s24">
+      <section class="panel"><h2 style="margin-bottom:10px">Runs</h2>${i.runs.length ? `<div class="list">${i.runs.map((r) => runRow(r, [r.agent, when(r.started || r.created), runCost(r.usage)].filter(Boolean).join(" · "))).join("")}</div>` : `<p class="small muted">No runs yet. The agent picks it up on its next heartbeat.</p>`}</section>
+      <section class="panel"><h2 style="margin-bottom:10px">Details</h2><dl class="kv">
+        <dt>Agent</dt><dd>${i.agent_id ? `<a href="#agents/${esc(i.agent_id)}">${esc(i.agent || "Agent")}</a>` : "Unassigned"}</dd>
+        <dt>Project</dt><dd>${esc(i.project || "None")}</dd>
+        <dt>Created</dt><dd>${esc(when(i.created) || "—")}</dd>
+        <dt>Updated</dt><dd>${esc(when(i.updated) || "—")}</dd></dl></section>
+    </div></div></div>`;
+}
+
+async function screenRun(id) {
+  const { data: r, html } = await boardItem(`/api/runs/${encodeURIComponent(id)}`, "#work", "Work");
+  if (!r) return html;
+  const back = r.issue ? backBtn(`#work/${esc(r.issue.id)}`, r.issue.ref || "Task") : backBtn("#work", "Work");
+  const active = ["running", "queued"].includes(r.status);
+  return `${back}
+  <div class="ph"><div class="ph-t"><div class="eyebrow">Run</div><h1 class="mono" style="font-size:26px">${esc(String(r.id).slice(0, 8))}</h1>
+    <p class="sub">${esc(r.agent || "Agent")}${r.issue ? ` on <a href="#work/${esc(r.issue.id)}">${esc([r.issue.ref, r.issue.title].filter(Boolean).join(" · "))}</a>` : ""}</p></div>
+    <div class="ph-a">${active ? `<button type="button" class="btn danger" data-act="cancelRun" data-arg="${esc(r.id)}">${ic("stop")}Stop run</button>` : ""}${boardBtn()}</div></div>
+  <div class="stack s24">
+    <div class="row-flex">${runBadge(r)}</div>
+    ${r.status === "failed" ? `<div class="notice err" role="status">${ic("alert")}<div><b>Run failed.</b> ${esc(r.error || "No reason given.")}</div></div>` : ""}
+    ${r.status === "cancelled" ? `<div class="notice info" role="status">${ic("info")}<div><b>Run stopped.</b> The task stays open; nothing is replayed.</div></div>` : ""}
+    <div class="cols"><section class="panel"><h2 style="margin-bottom:12px">Timeline</h2>${r.events.length ? `<ul class="timeline">${r.events.slice().reverse().map((e) => `<li class="${e.level === "error" ? "bad" : ""}"><span class="when">${esc(when(e.at))}</span><br>${esc(e.message)}</li>`).join("")}</ul>` : `<p class="small muted">No events recorded.</p>`}</section>
+      <section class="panel" style="align-self:start"><h2 style="margin-bottom:12px">Details</h2><dl class="kv">
+        <dt>Agent</dt><dd>${r.agent_id ? `<a href="#agents/${esc(r.agent_id)}">${esc(r.agent || "Agent")}</a>` : "—"}</dd>
+        <dt>Started by</dt><dd>${esc((r.source || "—").replace(/_/g, " "))}</dd>
+        <dt>Started</dt><dd>${esc(when(r.started || r.created) || "—")}</dd>
+        <dt>Ended</dt><dd>${esc(when(r.finished) || "—")}</dd>
+        <dt>Tokens</dt><dd>${esc(runTokens(r.usage))}</dd>
+        <dt>Reported cost</dt><dd>${r.usage && r.usage.cost_usd != null ? esc(usd(r.usage.cost_usd)) : `${badge("warn", "Not reported")}<br><span class="xs muted">Unpriced usage isn't counted as $0.00. Subscription runs (Codex, Claude) have no per-run price.</span>`}</dd></dl></section></div>
+  </div>`;
+}
+
+async function screenAgent(id) {
+  const { data: a, html } = await boardItem(`/api/agents/${encodeURIComponent(id)}`, "#agents", "Agents");
+  if (!a) return html;
+  const paused = a.status === "paused";
+  const active = a.runs.find((r) => ["running", "queued"].includes(r.status));
+  const pct = a.budget_cents ? Math.min(100, Math.round((100 * (a.spent_cents || 0)) / a.budget_cents)) : 0;
+  return `${backBtn("#agents", "Agents")}
+  <div class="ph"><div class="ph-t"><div class="row-flex" style="gap:12px"><span class="avatar lg" aria-hidden="true">${esc(initials(a.name))}</span><div><h1>${esc(a.name)}</h1><p class="sub">${esc(a.title || a.role || "")}</p></div></div></div>
+    <div class="ph-a"><button type="button" class="btn" data-act="${paused ? "resumeAgent" : "pauseAgent"}" data-arg="${esc(a.id)}">${paused ? "Resume new assignments" : "Pause new assignments"}</button>${active ? `<a class="btn" href="#work/run/${esc(active.id)}">Inspect active run</a>` : ""}${boardBtn()}</div></div>
+  <div class="stack s24">
+    <div class="row-flex">${badge(AGENT_BADGE[a.status], a.status_text)}${a.last_heartbeat ? `<span class="small muted">Last heartbeat ${esc(when(a.last_heartbeat))}</span>` : ""}</div>
+    ${paused ? `<div class="notice info" role="status">${ic("info")}<div><b>New assignments paused.</b> ${a.pause_reason ? esc(a.pause_reason) + ". " : ""}${active ? "The active run keeps going; use Stop run to stop it." : "No runs are active."}</div></div>` : ""}
+    <div class="cols"><div class="stack s24">
+      <section class="panel"><h2 style="margin-bottom:10px">Responsibility</h2><dl class="kv">
+        <dt>Role</dt><dd>${esc(a.title || a.role || "—")}</dd>
+        <dt>Reports to</dt><dd>${esc(a.reports_to_name || "You")}</dd>
+        <dt>Runtime</dt><dd>${esc(ADAPTERS[a.adapter] || a.adapter || "—")}</dd>
+        ${a.capabilities && a.capabilities !== (a.title || a.role) ? `<dt>Does</dt><dd>${esc(a.capabilities)}</dd>` : ""}</dl></section>
+      <section class="panel"><h2 style="margin-bottom:10px">Access</h2><div class="allow small">${(AGENT_ACCESS[a.name.toLowerCase()] || AGENT_ACCESS.other).map(([ok, t]) => `<div class="row-flex${ok ? "" : " muted"}">${ic(ok ? "check" : "lock", 16)}<span>${esc(t)}</span></div>`).join("")}</div>
+        <p class="xs muted" style="margin-top:10px">Set on the server, not here. An agent can't grant itself or others access.</p></section>
+      <section class="panel"><h2 style="margin-bottom:10px">Work</h2>${a.work.length ? `<div class="list">${a.work.map(issueRow).join("")}</div>` : `<p class="small muted">No assigned work.</p>`}</section>
+    </div><div class="stack s24">
+      <section class="panel"><h2 style="margin-bottom:10px">Spending this month</h2>${a.budget_cents ? `<div class="kpi"><b style="font-size:30px">${money(a.spent_cents)}</b><span>of ${money(a.budget_cents)} budget</span></div><div class="bar" style="margin:10px 0"><i style="width:${pct}%"></i></div>` : `<div class="kpi"><b style="font-size:30px">${a.spent_cents ? money(a.spent_cents) : "—"}</b><span>${a.spent_cents ? "no budget set" : "runs on a subscription"}</span></div>`}<p class="xs muted" style="margin-top:8px">Reported by Paperclip. A budget is a board warning, not the provider's billing cap.</p></section>
+      <section class="panel"><h2 style="margin-bottom:10px">Runs</h2>${a.runs.length ? `<div class="list">${a.runs.map((r) => runRow(r, [r.issue_ref, when(r.started || r.created)].filter(Boolean).join(" · "))).join("")}</div>` : `<p class="small muted">No runs.</p>`}</section>
+      <section class="panel"><h2 style="margin-bottom:10px">Routines</h2>${a.routines.length ? `<div class="list">${a.routines.map((r) => `<a class="li" href="#routines/${esc(r.id)}"><span class="main"><span class="t">${esc(r.title)}</span><span class="s">${esc(r.schedule || "Manual")}</span></span>${routineBadge(r.status)}</a>`).join("")}</div>` : `<p class="small muted">None.</p>`}</section>
+    </div></div></div>`;
 }
 
 async function screenAgents() {
@@ -327,12 +412,39 @@ async function screenAgents() {
   <div class="ph"><div class="ph-t"><h1>Agents</h1><p class="sub">Who does what, and what their work costs this month.</p></div></div>
   ${a && !a.ok ? notConnected("The Paperclip board", a.error) : ""}
   <div class="cols" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr))">${list.map((g) => `
-    <section class="panel" style="display:flex;flex-direction:column;gap:10px">
+    <a class="panel" href="#agents/${esc(g.id)}" style="display:flex;flex-direction:column;gap:10px;text-decoration:none;color:inherit">
       <div class="row-flex"><span class="avatar lg" aria-hidden="true">${esc(initials(g.name))}</span><div style="min-width:0;flex:1"><h2>${esc(g.name)}</h2><p class="small muted">${esc(g.title || "")}</p></div></div>
       ${badge(AGENT_BADGE[g.status], g.status_text)}
       <p class="small">${g.current ? `<span class="mono">${esc(g.current.ref || "")}</span> ${esc(g.current.title)}` : "No current work"}</p>
       <div class="small muted num">${g.budget_cents ? `${money(g.spent_cents)} of ${money(g.budget_cents)} this month` : g.spent_cents ? `${money(g.spent_cents)} this month · no budget set` : "Runs on a subscription · no spend recorded"}</div>
-    </section>`).join("")}</div>`;
+    </a>`).join("")}</div>`;
+}
+
+const routineBadge = (st) => badge(st === "active" ? "ok" : st === "paused" ? "warn" : "", st ? st[0].toUpperCase() + st.slice(1) : "Unknown");
+const ADAPTERS = { hermes_local: "Hermes Agent (Max)", codex_local: "Codex CLI · sealed box", claude_local: "Claude Code · sealed box", process: "Script", http: "Web hook" };
+// What each agent can reach, as set up on the server (see the build plan). Not editable here.
+const AGENT_ACCESS = {
+  max: [[1, "Public web search; browser on approved sites only"], [1, "Test mailbox, read-only"], [1, "salt notebooks: write, no delete"], [1, "Board: read task, comment, mark done"], [0, "Your real Gmail and calendar"], [0, "Health data"], [0, "Sending email without your fingerprint"]],
+  codex: [[1, "Sealed box: GitHub, code libraries, its own model"], [1, "salt notebooks: write, no delete"], [0, "Max, Signal, approvals and backups"], [0, "Mail, calendar and health data"]],
+  claude: [[1, "Sealed box: GitHub, code libraries, its own model"], [1, "salt notebooks: write, no delete"], [0, "Max, Signal, approvals and backups"], [0, "Mail, calendar and health data"]],
+  other: [[0, "Private data: mail, calendar, health"]],
+};
+
+async function screenRoutine(id) {
+  const { data: r, html } = await boardItem(`/api/routines/${encodeURIComponent(id)}`, "#routines", "Routines");
+  if (!r) return html;
+  return `${backBtn("#routines", "Routines")}
+  <div class="ph"><div class="ph-t"><div class="eyebrow">Routine</div><h1>${esc(r.title || "Routine")}</h1><p class="sub">${r.agent_id ? `Assigned to <a href="#agents/${esc(r.agent_id)}">${esc(r.agent || "an agent")}</a>` : "No assignee"}</p></div>
+    <div class="ph-a">${boardBtn("Edit in Paperclip")}</div></div>
+  <div class="stack s24">
+    <div class="row-flex">${routineBadge(r.status)}</div>
+    <div class="cols"><div class="stack s24">
+      <section class="panel"><h2 style="margin-bottom:10px">What it does</h2>${r.description ? `<div class="md">${md(r.description)}</div>` : `<p class="small muted">No description.</p>`}</section>
+      <section class="panel"><h2 style="margin-bottom:10px">History</h2>${r.runs.length ? `<div class="list">${r.runs.map((x) => `<${x.issue_id ? `a href="#work/${esc(x.issue_id)}"` : "div"} class="li"><span class="main"><span class="t">${esc(when(x.triggered) || "—")}</span><span class="s">${esc([x.source, x.issue_ref && `${x.issue_ref} ${x.issue_title || ""}`, x.failure].filter(Boolean).join(" · "))}</span></span>${badge(/fail/.test(x.status) ? "err" : /complet|succe/.test(x.status) ? "ok" : "", ((x.status || "unknown")[0].toUpperCase() + (x.status || "unknown").slice(1)).replace(/_/g, " "))}</${x.issue_id ? "a" : "div"}>`).join("")}</div>` : `<p class="small muted">Never run.</p>`}</section>
+    </div><div class="stack s24">
+      <section class="panel"><h2 style="margin-bottom:10px">Schedule</h2>${r.triggers.length ? r.triggers.map((t) => `<dl class="kv"><dt>When</dt><dd>${esc(t.label || t.kind || "—")}${t.enabled ? "" : " · off"}</dd>${t.timezone ? `<dt>Time zone</dt><dd>${esc(t.timezone)}</dd>` : ""}<dt>Next run</dt><dd>${esc(when(t.next_run) || "—")}</dd><dt>Last run</dt><dd>${esc(t.last_run ? `${when(t.last_run)}${t.last_result ? " · " + t.last_result : ""}` : "Never")}</dd></dl>`).join('<hr class="sep">') : `<p class="small muted">Runs only when started by hand.</p>`}</section>
+      <p class="xs muted">Server jobs (backups, cost check, Monday digest) run outside Paperclip; see System.</p>
+    </div></div></div>`;
 }
 
 async function screenRoutines() {
@@ -343,9 +455,9 @@ async function screenRoutines() {
   <div class="ph"><div class="ph-t"><h1>Routines</h1><p class="sub">Recurring agent work scheduled in Paperclip.</p></div></div>
   ${r && !r.ok ? notConnected("The Paperclip board", r.error) : ""}
   ${list.length ? `<div class="tbl-wrap"><table class="tbl tbl-cards"><thead><tr><th>Routine</th><th>Assignee</th><th>Schedule</th><th>Status</th><th>Next run</th><th>Last result</th></tr></thead><tbody>${list.map((x) => `
-    <tr><td data-l="Routine"><b>${esc(x.title)}</b></td><td data-l="Assignee">${esc(x.agent || "None")}</td>
+    <tr><td data-l="Routine"><a href="#routines/${esc(x.id)}"><b>${esc(x.title)}</b></a></td><td data-l="Assignee">${esc(x.agent || "None")}</td>
     <td data-l="Schedule">${esc(x.schedule || "Manual")}${x.timezone ? `<br><span class="xs muted">${esc(x.timezone)}</span>` : ""}</td>
-    <td data-l="Status">${badge(x.status === "active" ? "ok" : x.status === "paused" ? "warn" : "", x.status ? x.status[0].toUpperCase() + x.status.slice(1) : "Unknown")}</td>
+    <td data-l="Status">${routineBadge(x.status)}</td>
     <td data-l="Next run">${esc(x.next_run ? when(x.next_run) : "—")}</td>
     <td data-l="Last result" class="small">${esc(x.last_result ? `${x.last_result[0].toUpperCase() + x.last_result.slice(1)} · ${when(x.last_run)}` : "Never run")}</td></tr>`).join("")}</tbody></table></div>` : r && r.ok ? `<div class="empty"><h3>No routines yet</h3><p class="small">Recurring work you set up in Paperclip shows here.</p></div>` : ""}
   <p class="small muted" style="margin-top:12px">Server jobs such as backups, the cost check and the Monday digest run outside Paperclip; their health is under System.</p>`;
@@ -1523,8 +1635,8 @@ async function render() {
   let html;
   if (area === "today") html = await screenToday();
   else if (area === "work") html = await screenWork(rest.join("/"));
-  else if (area === "agents") html = await screenAgents();
-  else if (area === "routines") html = await screenRoutines();
+  else if (area === "agents") html = rest[0] ? await screenAgent(rest[0]) : await screenAgents();
+  else if (area === "routines") html = rest[0] ? await screenRoutine(rest[0]) : await screenRoutines();
   else if (area === "approvals") html = await screenApprovals(rest.join("/"));
   else if (area === "system") html = await screenSystem(rest[0]);
   else if (area === "max") html = await screenMax(rest[0]);

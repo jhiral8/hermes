@@ -7,6 +7,7 @@ rather than an error.
 """
 
 import json
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -33,6 +34,41 @@ APPROVAL_TYPE = {
     "budget_override_required": "Go over budget",
     "request_board_approval": "Board decision",
 }
+
+
+RUN_STATUS = {
+    "queued": "Queued", "running": "Running", "succeeded": "Finished", "completed": "Finished",
+    "failed": "Failed", "cancelled": "Stopped", "timed_out": "Timed out", "cancelling": "Stop requested",
+}
+REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+MAX_TEXT = 4000
+
+
+def _ref(x):
+    if not REF.fullmatch(str(x or "")):
+        raise PaperclipError("not a board id")
+    return x
+
+
+def _clip(text, n=MAX_TEXT):
+    text = text if isinstance(text, str) else ("" if text is None else str(text))
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def _usage(u):
+    u = u if isinstance(u, dict) else {}
+    cost = u.get("costUsd", u.get("totalCostUsd"))
+    return {"input_tokens": u.get("inputTokens"), "output_tokens": u.get("outputTokens"),
+            "cost_usd": cost if isinstance(cost, (int, float)) else None}
+
+
+def _run(r):
+    st = r.get("status")
+    return {"id": r.get("id") or r.get("runId"), "status": st, "status_text": RUN_STATUS.get(st, st or "Unknown"),
+            "agent_id": r.get("agentId"), "issue_id": r.get("issueId"),
+            "source": r.get("invocationSource"), "trigger": _clip(r.get("triggerDetail"), 300),
+            "created": r.get("createdAt"), "started": r.get("startedAt"), "finished": r.get("finishedAt"),
+            "error": _clip(r.get("error"), 1000) or None, "usage": _usage(r.get("usageJson") or r.get("usage"))}
 
 
 def _as_list(body, *keys):
@@ -197,6 +233,66 @@ class Paperclip:
             "budget_cents": s.get("budgetCents"),
             "pricing_complete": s.get("pricingComplete"),
         }
+
+    # ------------------------------------------------------------ one record
+
+    def issue_detail(self, issue_id):
+        i = self._call("GET", f"/issues/{_ref(issue_id)}")
+        if not isinstance(i, dict) or not i.get("id"):
+            raise PaperclipError("task not found")
+        comments = [{"id": c.get("id"), "body": _clip(c.get("body")), "agent_id": c.get("authorAgentId"),
+                     "by_user": bool(c.get("authorUserId")), "created": c.get("createdAt")}
+                    for c in _as_list(self._call("GET", f"/issues/{i['id']}/comments"), "comments")]
+        runs = [_run(r) for r in _as_list(self._call("GET", f"/issues/{i['id']}/runs"), "runs")]
+        return {"id": i.get("id"), "ref": i.get("identifier"), "title": i.get("title") or "(untitled)",
+                "description": _clip(i.get("description")), "status": i.get("status"),
+                "status_text": ISSUE_STATUS.get(i.get("status"), i.get("status") or "Unknown"),
+                "priority": i.get("priority"), "project_id": i.get("projectId"),
+                "agent_id": i.get("assigneeAgentId"), "parent_id": i.get("parentId"),
+                "created": i.get("createdAt"), "updated": i.get("updatedAt"),
+                "comments": sorted(comments, key=lambda c: c["created"] or ""),
+                "runs": sorted(runs, key=lambda r: r["created"] or r["started"] or "", reverse=True)[:30]}
+
+    def run_detail(self, run_id):
+        r = self._call("GET", f"/heartbeat-runs/{_ref(run_id)}")
+        if not isinstance(r, dict) or not r.get("id"):
+            raise PaperclipError("run not found")
+        out = _run(r)
+        out["events"] = [{"seq": e.get("seq"), "type": e.get("eventType"), "level": e.get("level"),
+                          "message": _clip(e.get("message"), 500), "at": e.get("createdAt")}
+                         for e in _as_list(self._call("GET", f"/heartbeat-runs/{r['id']}/events?limit=200"), "events")
+                         if e.get("message")]
+        return out
+
+    def agent_detail(self, agent_id):
+        a = self._call("GET", f"/agents/{_ref(agent_id)}")
+        if not isinstance(a, dict) or not a.get("id"):
+            raise PaperclipError("agent not found")
+        runs = self._call("GET", self._co(f"/heartbeat-runs?agentId={a['id']}&limit=20&summary=true"))
+        return {"id": a.get("id"), "name": a.get("name") or "?", "title": a.get("title") or a.get("role"),
+                "role": a.get("role"), "status": a.get("status"),
+                "status_text": AGENT_STATUS.get(a.get("status"), a.get("status") or "Unknown"),
+                "pause_reason": a.get("pauseReason"), "adapter": a.get("adapterType"),
+                "reports_to": a.get("reportsTo"), "capabilities": _clip(a.get("capabilities"), 1000) or None,
+                "spent_cents": a.get("spentMonthlyCents"), "budget_cents": a.get("budgetMonthlyCents"),
+                "last_heartbeat": a.get("lastHeartbeatAt"), "created": a.get("createdAt"),
+                "runs": [_run(r) for r in _as_list(runs, "runs")][:20]}
+
+    def routine_detail(self, routine_id):
+        r = self._call("GET", f"/routines/{_ref(routine_id)}")
+        if not isinstance(r, dict) or not r.get("id"):
+            raise PaperclipError("routine not found")
+        runs = [{"id": x.get("id"), "status": x.get("status"), "source": x.get("source"),
+                 "triggered": x.get("triggeredAt") or x.get("createdAt"), "completed": x.get("completedAt"),
+                 "issue_id": x.get("linkedIssueId"), "failure": _clip(x.get("failureReason"), 500) or None}
+                for x in _as_list(self._call("GET", f"/routines/{r['id']}/runs?limit=20"), "runs")][:20]
+        return {"id": r.get("id"), "title": r.get("title"), "description": _clip(r.get("description")),
+                "agent_id": r.get("assigneeAgentId"), "status": r.get("status"),
+                "triggers": [{"kind": t.get("kind"), "label": t.get("label") or t.get("cronExpression"),
+                              "timezone": t.get("timezone"), "enabled": bool(t.get("enabled")),
+                              "next_run": t.get("nextRunAt"), "last_run": t.get("lastFiredAt"),
+                              "last_result": t.get("lastResult")} for t in (r.get("triggers") or [])],
+                "runs": runs}
 
     # ------------------------------------------------------------ writes
 

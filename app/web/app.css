@@ -50,3 +50,4 @@ a.spark-card { text-decoration: none; color: inherit; }
 .lib-file .art-frame{width:100%;height:70vh;border:0;display:block}
 .lib-file .art-doc,.lib-file .art-code,.lib-file .art-svg{padding:20px;margin:0}
 .panel.skill p.small{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.panel hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}

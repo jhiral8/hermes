@@ -178,6 +178,67 @@ class App:
             **self.meta(),
         }
 
+    # ------------------------------------------------------------ one record
+
+    def _detail(self, fn):
+        out = _section(fn)
+        if not out["ok"] and (out["error"].startswith("missing ") or out["error"] in ("Paperclip answered 404", "not a board id")):
+            out["error"] = "not found"
+        return {"item": out, **self.meta()}
+
+    def issue(self, issue_id):
+        def build():
+            board = self._need(self.board, "Paperclip")
+            names = self._agent_names()
+            i = board.issue_detail(issue_id)
+            i["agent"] = names.get(i.get("agent_id"))
+            i["project"] = (self._cached("projects", board.projects).get(i.get("project_id")) or {}).get("name")
+            for c in i["comments"]:
+                c["by"] = "You" if c.get("by_user") else names.get(c.get("agent_id")) or "Agent"
+            for r in i["runs"]:
+                r["agent"] = names.get(r.get("agent_id"))
+            return i
+        return self._detail(build)
+
+    def run(self, run_id):
+        def build():
+            r = self._need(self.board, "Paperclip").run_detail(run_id)
+            r["agent"] = self._agent_names().get(r.get("agent_id"))
+            if r.get("issue_id"):
+                hit = next((i for i in self._cached("issues", self.board.issues) if i["id"] == r["issue_id"]), None)
+                r["issue"] = {"id": r["issue_id"], "ref": hit and hit.get("ref"), "title": hit and hit.get("title")}
+            return r
+        return self._detail(build)
+
+    def agent(self, agent_id):
+        def build():
+            board = self._need(self.board, "Paperclip")
+            a = board.agent_detail(agent_id)
+            names = self._agent_names()
+            a["reports_to_name"] = names.get(a.get("reports_to"))
+            issues = self._cached("issues", board.issues)
+            a["work"] = [{**i, "agent": a["name"]} for i in issues if i["agent_id"] == a["id"]][:20]
+            refs = {i["id"]: i.get("ref") for i in issues}
+            for r in a["runs"]:
+                r["issue_ref"] = refs.get(r.get("issue_id"))
+            try:
+                a["routines"] = [r for r in self._cached("routines", board.routines) if r.get("agent_id") == a["id"]]
+            except ERRORS:
+                a["routines"] = []
+            return a
+        return self._detail(build)
+
+    def routine(self, routine_id):
+        def build():
+            board = self._need(self.board, "Paperclip")
+            r = board.routine_detail(routine_id)
+            r["agent"] = self._agent_names().get(r.get("agent_id"))
+            refs = {i["id"]: (i.get("ref"), i.get("title")) for i in self._cached("issues", board.issues)}
+            for x in r["runs"]:
+                x["issue_ref"], x["issue_title"] = refs.get(x.get("issue_id"), (None, None))
+            return r
+        return self._detail(build)
+
     # ------------------------------------------------------------ actions
 
     def create_task(self, user, body):

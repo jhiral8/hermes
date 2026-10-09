@@ -401,6 +401,10 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._health_get(path[len("/api/health/"):])
             elif path in get_routes:
                 self._json(200, get_routes[path]())
+            elif re.fullmatch(r"/api/(work|runs|agents|routines)/[A-Za-z0-9_-]{1,64}", path):
+                kind, rid = path.split("/")[2:4]
+                out = {"work": app.issue, "runs": app.run, "agents": app.agent, "routines": app.routine}[kind](rid)
+                self._json(200 if out["item"]["ok"] or out["item"]["error"] != "not found" else 404, out)
             elif path.startswith("/api/"):
                 self._json(404, {"error": "not found"})
             else:
