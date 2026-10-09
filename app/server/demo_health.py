@@ -41,7 +41,7 @@ def _totals(items):
     t = {k: 0 for k in ("calories", "proteins", "carbohydrates", "fat", "fiber")}
     for i in items:
         for k in t:
-            t[k] += i["nutrition"][k]
+            t[k] += i["nutrition"].get(k) or 0
     return {k: round(v, 1) for k, v in t.items()}
 
 
@@ -66,6 +66,68 @@ def _workouts(today):
     return out
 
 
+# Sample-mode writes live only in memory, so logging can be tried without a
+# Trace app. They vanish when the app restarts.
+CATALOG = [{"id": n + 1, "name": name, "brand": brand, "portion": q, "unit": unit, "barcode": None,
+            "nutrition": {"calories": kcal, "proteins": p, "carbohydrates": c, "fat": f, "fiber": fib}}
+           for n, (_, name, brand, q, unit, kcal, p, c, f, fib) in enumerate(FOODS)]
+LOGGED = {}   # date -> extra diary items
+WATER = {}    # date -> ml
+
+
+def reset():
+    """Forget sample-mode writes (tests)."""
+    del CATALOG[len(FOODS):]
+    LOGGED.clear()
+    WATER.clear()
+
+
+def _exercises():
+    seen = {}
+    for _, ex in WORKOUTS:
+        for i, nm, _, _ in ex:
+            seen.setdefault(i, {"id": len(seen) + 1, "key": i, "name": nm, "category": "strength",
+                                "equipment": None, "set_type": "reps"})
+    return list(seen.values())
+
+
+def write(host, path, body):
+    parts = path.strip("/").split("/")
+    if host.startswith("nutritrace") and parts == ["foods"]:
+        for f in CATALOG:
+            if f["name"].lower() == body["name"].lower() and (f["brand"] or "").lower() == (body.get("brand") or "").lower():
+                raise _http(409, {"error": "already exists", "code": "duplicate", "id": f["id"]})
+        food = {"id": len(CATALOG) + 1, "name": body["name"], "brand": body.get("brand"), "portion": body["portion"],
+                "unit": body["unit"], "barcode": body.get("barcode"), "nutrition": body["nutrition"]}
+        CATALOG.append(food)
+        return food
+    if host.startswith("nutritrace") and parts[0] == "diary" and parts[2] == "food":
+        f = next((x for x in CATALOG if x["id"] == body["food_id"]), None)
+        if f is None:
+            raise _http(400, {"error": f"food_id {body['food_id']} not found in your catalog."})
+        k = body.get("quantity") or 1
+        item = {"name": f["name"], "brand": f["brand"], "meal": body.get("meal", 0), "quantity": f["portion"] * k,
+                "unit": f["unit"], "source": "hermes",
+                "nutrition": {n: round(v * k, 1) for n, v in f["nutrition"].items()}}
+        LOGGED.setdefault(parts[1], []).append(item)
+        return {"ok": True, "date": parts[1], "logged": {"food_id": f["id"], "name": f["name"], "meal": item["meal"],
+                                                          "portion": f["portion"], "unit": f["unit"], "quantity": k}}
+    if host.startswith("nutritrace") and parts[0] == "diary" and parts[2] == "water":
+        WATER[parts[1]] = WATER.get(parts[1], 0) + body["amount_ml"]
+        return {"ok": True, "date": parts[1], "total_ml_on_day": WATER[parts[1]]}
+    if host.startswith("lifttrace") and parts[0] == "workouts" and parts[2] == "sets":
+        ex = next((x for x in _exercises() if x["id"] == body["exercise_id"]), None)
+        if ex is None:
+            raise _http(400, {"error": f"No exercise with id {body['exercise_id']} in the catalog."})
+        return {"ok": True, "date": parts[1], "exercise_id": ex["id"], "exercise_name": ex["name"], "sets_on_exercise": 1}
+    raise ValueError("no sample write for " + host + path)
+
+
+def _http(code, body):
+    import urllib.error
+    return urllib.error.HTTPError("http://sample", code, "sample", {}, io.BytesIO(json.dumps(body).encode()))
+
+
 def make_opener(today_fn):
     def opener(req, timeout=None):
         u = urllib.parse.urlparse(req.full_url)
@@ -73,7 +135,10 @@ def make_opener(today_fn):
         path = u.path.split("/api/v1", 1)[-1]
         host = u.netloc
         today = today_fn()
-        body = answer(host, path, q, today)
+        if req.get_method() != "GET":
+            body = write(host, path, json.loads(req.data or b"{}"))
+        else:
+            body = answer(host, path, q, today)
         return io.BytesIO(json.dumps(body).encode())
     return opener
 
@@ -81,6 +146,10 @@ def make_opener(today_fn):
 def answer(host, path, q, today):
     parts = path.strip("/").split("/")
     if host.startswith("nutritrace"):
+        if parts[0] == "foods":
+            term = (q.get("q") or "").lower()
+            items = [f for f in CATALOG if term in f["name"].lower() or term in (f["brand"] or "").lower()]
+            return {"items": items[:int(q.get("limit") or 25)], "total": len(items)}
         if parts[0] == "goals":
             return {"goals": {"calories": 2300, "proteins": 170, "carbohydrates": 240, "fat": 75, "fiber": 30},
                     "water_goal_ml": 2500}
@@ -89,8 +158,10 @@ def answer(host, path, q, today):
             items = [] if d > today or d.toordinal() % 9 == 0 else _day_items(d)
             if d == today:
                 items = [i for i in items if i["meal"] <= 1]
+            items = items + LOGGED.get(d.isoformat(), [])
             if len(parts) == 3:
-                return {"date": d.isoformat(), "totals": _totals(items), "water_ml": 1500 if items else 0,
+                return {"date": d.isoformat(), "totals": _totals(items),
+                        "water_ml": (1500 if items else 0) + WATER.get(d.isoformat(), 0),
                         "item_count": len(items)}
             return {"date": d.isoformat(), "items": items}
     if host.startswith("lifttrace"):
@@ -107,6 +178,10 @@ def answer(host, path, q, today):
                          [{"reps": r, "weight": w + (2.5 if bump and w else 0), "completed": True, "rpe": 7 + s} for s in range(3)]}
                         for i, nm, w, r in e]}
             return {"exercises": []}
+        if parts[0] == "exercises":
+            term = (q.get("query") or "").lower()
+            return {"exercises": [{k: v for k, v in x.items() if k != "key"} for x in _exercises()
+                                  if term in x["name"].lower()][:int(q.get("limit") or 20)]}
         if parts[0] == "programs":
             return {"active": True, "name": "Upper/Lower 4-day", "duration_weeks": 8, "current_week": 3, "templates": [
                 {"template_id": str(k), "name": n, "day_label": ["Mon", "Tue", "Thu", "Fri"][k],
@@ -172,6 +247,6 @@ def sample_estimator():
 
 def sample_config():
     return {"estimator_file": sample_estimator(),
-            "nutritrace": {"url": "http://nutritrace.sample", "key": "sample", "web_url": None},
-            "lifttrace": {"url": "http://lifttrace.sample", "key": "sample", "web_url": None},
+            "nutritrace": {"url": "http://nutritrace.sample", "key": "sample", "write_key": "sample", "web_url": None},
+            "lifttrace": {"url": "http://lifttrace.sample", "key": "sample", "write_key": "sample", "web_url": None},
             "cooktrace": {"url": "http://cooktrace.sample", "key": "sample", "web_url": None}}

@@ -1,8 +1,8 @@
-"""Health screens: NutriTrace, LiftTrace and CookTrace, read-only.
+"""Health screens: NutriTrace, LiftTrace and CookTrace.
 
 The app reads the three apps' public REST APIs (/api/v1) on loopback with
-Craig's read-only "hermes-read" tokens. Logging stays in the apps until the
-app matches or beats them. Health data goes only to Craig's browser: none of
+Craig's read-only "hermes-read" tokens. Logging (health_log.py) uses the
+separate "hermes-write" tokens. Health data goes only to Craig's browser: none of
 it is passed to Max or any model.
 
 What the tokens can't read (weight history, fasting, workout calories) shows
@@ -64,6 +64,8 @@ class TraceApp:
         self.base = cfg["url"].rstrip("/") + "/api/v1"
         self.key_file = cfg.get("key_file")
         self.key = cfg.get("key")  # sample-data mode only; real tokens live in key files
+        self.write_key_file = cfg.get("write_key_file")
+        self.write_key = cfg.get("write_key")  # sample-data mode only
         self.web_url = cfg.get("web_url")
         self.timeout = float(cfg.get("timeout", 5))
         self._open = opener or urllib.request.urlopen
@@ -102,6 +104,54 @@ class TraceApp:
         with self._lock:
             self._cache[url] = (now, data)
         return data
+
+
+    def _write_token(self):
+        if self.write_key:
+            return self.write_key
+        try:
+            return Path(self.write_key_file).read_text(encoding="utf-8").strip()
+        except (OSError, TypeError):
+            raise SourceError(f"{self.name} write token isn't set up on the server")
+
+    def send(self, method, path, body):
+        """One write with the write token. The app's own refusal (bad input,
+        duplicate) comes back as Refused with its message; anything else is
+        a SourceError. Cached reads are dropped so the screen shows the change."""
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), method=method,
+                                     headers={"Authorization": "Bearer " + self._write_token(),
+                                              "Content-Type": "application/json", "Accept": "application/json",
+                                              "User-Agent": "hermes-app"})
+        try:
+            with self._open(req, timeout=self.timeout) as r:
+                data = json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            try:
+                detail = json.loads(e.read() or b"{}")
+            except ValueError:
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {}
+            if e.code in (400, 409, 422):
+                raise Refused(e.code, f"{self.name}: {detail.get('error') or 'refused the entry'}", detail)
+            why = {401: "refused the write token", 403: "write token lacks the scope",
+                   404: "writes aren't switched on", 429: "rate limited"}.get(e.code, f"answered {e.code}")
+            raise SourceError(f"{self.name} {why}")
+        except (urllib.error.URLError, OSError) as e:
+            raise SourceError(f"{self.name} unreachable ({type(e).__name__})")
+        except ValueError:
+            raise SourceError(f"{self.name} sent something that isn't JSON")
+        with self._lock:
+            self._cache.clear()
+        return data
+
+
+class Refused(Exception):
+    """A Trace app turned down an entry (bad input, or a duplicate)."""
+
+    def __init__(self, code, message, detail=None):
+        super().__init__(message)
+        self.code, self.detail = code, detail or {}
 
 
 def _section(fn):

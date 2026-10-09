@@ -34,7 +34,8 @@ from sources import SourceError
 from artifacts import ArtifactError, Artifacts
 from chat import ChatError, DemoMax, MaxChat
 from demo import Demo
-from health import Health
+from health import Health, Refused
+from health_log import HealthLog
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
@@ -324,6 +325,7 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
     if library is None:
         library = make_library(cfg, app)
     library_cfg = cfg.get("library") or {}
+    hlog = HealthLog(health) if health is not None else None
 
     get_routes = {
         "/api/today": app.today,
@@ -450,6 +452,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     result = self._chat_post(user, parts[2:], body)
                 elif parts == ["api", "health", "foods"]:
                     result = self._foods_do(lambda: foods.save(body))
+                elif parts[:3] == ["api", "health", "log"] and len(parts) == 4:
+                    result = self._health_log(user, parts[3], body)
                 else:
                     result = self._dispatch(user, parts, body)
             except (ActionError, ChatError) as e:
@@ -570,6 +574,13 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     out = health.meals()
                 elif what == "progress":
                     out = health.progress(int((q.get("days") or ["14"])[0]))
+                elif what in ("search/foods", "search/exercises"):
+                    term = (q.get("q") or [""])[0]
+                    try:
+                        out = hlog.search_foods(term) if what == "search/foods" else hlog.search_exercises(term)
+                    except SourceError as e:
+                        self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                        return
                 else:
                     self._json(404, {"error": "not found"})
                     return
@@ -587,6 +598,25 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 raise ActionError(503, str(e))
             except ValueError as e:
                 raise ActionError(400, str(e))
+
+        def _health_log(self, user, kind, body):
+            """Adds one entry to NutriTrace or LiftTrace. Never edits or deletes."""
+            fn = {"food-new": "add_food", "food": "log_food", "water": "log_water", "set": "log_set"}.get(kind)
+            if fn is None:
+                return None
+            if hlog is None:
+                raise ActionError(503, "Health isn't connected on the server yet.")
+            try:
+                out = getattr(hlog, fn)(body)
+            except ValueError as e:
+                raise ActionError(400, str(e))
+            except Refused as e:
+                raise ActionError(409 if e.code == 409 else 400, str(e))
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            # The audit line says what kind of entry was added, not what was eaten or lifted.
+            app.audit(user, "health_" + kind.replace("-", "_"), {"date": out.get("date")})
+            return {"ok": True, **out, **app.meta()}
 
         def _foods_get(self, what):
             try:
