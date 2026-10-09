@@ -199,6 +199,8 @@ class HermesMax:
 class DemoMax:
     """Scripted replies for sample-data mode."""
 
+    sample = True
+
     def __init__(self, artifact_dir=None):
         self.artifact_dir = artifact_dir
 

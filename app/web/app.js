@@ -2136,7 +2136,8 @@ async function screenMealPlan(week) {
   const list = `<div class="stack s16 mp-list">${past.length && past.length < 7 ? `<details class="panel"><summary class="small" style="cursor:pointer">Earlier this week (${past.length} day${past.length === 1 ? "" : "s"})</summary><div class="stack s16" style="margin-top:12px">${past.map(dayCard).join("")}</div></details>` : past.map(dayCard).join("")}${v.week.filter((d) => d >= v.today).map(dayCard).join("")}</div>`;
   const planned = v.slots.filter((s) => s.status !== "skipped");
   const kcal = planned.reduce((a, s) => a + (s.per_serving && s.per_serving.kcal ? s.per_serving.kcal * s.portions : 0), 0);
-  return healthHead("meals", "Meals & Shop", `<button type="button" class="btn primary" data-act="slotNew" data-arg="${v.today >= v.week[0] && v.today <= v.week[6] ? v.today : v.week[0]}|dinner">${ic("plus", 16)}Plan a meal</button>`,
+  const future = v.week[6] >= v.today;
+  return healthHead("meals", "Meals & Shop", `${future ? `<button type="button" class="btn" data-act="propOpen" data-arg="app">Propose a week</button><button type="button" class="btn" data-act="propOpen" data-arg="max">${ic("max", 16)}Ask Max</button>` : ""}<button type="button" class="btn primary" data-act="slotNew" data-arg="${v.today >= v.week[0] && v.today <= v.week[6] ? v.today : v.week[0]}|dinner">${ic("plus", 16)}Plan a meal</button>`,
       "Plan meals from your CookTrace recipes. A planned meal counts once you log it.") + mealsSub("meals") + `<div class="stack s16">
     <div class="row-flex" style="flex-wrap:wrap;gap:12px"><div class="btns" style="gap:4px">
       <a class="iconbtn" href="#health/meals/plan/${v.prev}" aria-label="Previous week">${ic("back")}</a>
@@ -2187,7 +2188,45 @@ function openSlot(id) {
      ${canLog ? `<button type="button" class="btn primary" data-act="slotLog" data-arg="${esc(id)}">Log ${esc(s.portions)} portion${s.portions === 1 ? "" : "s"}</button>` : `<button type="button" class="btn" data-act="close">Close</button>`}`);
 }
 
+// A proposed week (the app planner or Max). Nothing is added until Craig accepts.
+async function openProposal(source) {
+  const week = S.plan ? S.plan.week[0] : null;
+  modal(source === "max" ? "Ask Max to plan" : "Propose a week", `<p class="small muted">${source === "max" ? "Max is planning from your recipes and targets. This can take a minute." : "Working it out…"}</p>`, `<button type="button" class="btn ghost" data-act="close">Cancel</button>`);
+  try {
+    S.prop = await api(`/api/health/plan/${source === "max" ? "ask-max" : "propose"}`, { body: { week } });
+    S.prop.keep = S.prop.items.map(() => true);
+    drawProposal();
+  } catch (e) {
+    if ($("#m-title")) modal(source === "max" ? "Ask Max to plan" : "Propose a week", notConnected(source === "max" ? "Max" : "The planner", e.message), `<button type="button" class="btn" data-act="close">Close</button>`);
+  }
+}
+function drawProposal() {
+  const p = S.prop, byDay = {};
+  p.items.forEach((x, i) => (byDay[x.date] = byDay[x.date] || []).push([x, i]));
+  const label = (m) => (PLAN_MEALS.find(([k]) => k === m) || [, m])[1];
+  const n = p.keep.filter(Boolean).length;
+  const body = `${p.note ? `<div class="notice info" role="status">${ic("info")}<div>${esc(p.note)}</div></div>` : ""}
+    <p class="small muted" style="margin:10px 0">${p.source === "max" ? "Max's" : "The app's"} suggestion for the open meals. Untick anything you don't want.</p>
+    <div class="stack s16">${Object.keys(byDay).map((d) => {
+      const rows = byDay[d], kcal = rows.reduce((a, [x, i]) => a + (p.keep[i] ? x.kcal : 0), 0);
+      return `<div><div class="row-flex" style="justify-content:space-between"><b class="small">${esc(dayName(d))}</b><span class="xs muted">${fmtN(kcal)} kcal added${p.targets && p.targets[d] ? ` · target ${fmtN(p.targets[d])}` : ""}</span></div>
+        <div class="list">${rows.map(([x, i]) => `<label class="li" style="cursor:pointer"><input type="checkbox" data-prop="${i}"${p.keep[i] ? " checked" : ""} style="margin-right:10px"><span class="main"><span class="t">${esc(label(x.meal))}: ${esc(x.recipe)}</span><span class="s">${x.portions} portion${x.portions === 1 ? "" : "s"} · ${fmtN(x.kcal)} kcal · P ${fmtN(x.protein)} g</span></span></label>`).join("")}</div></div>`;
+    }).join("")}</div>`;
+  modal(p.source === "max" ? "Max's plan" : "Proposed week", body,
+    `<button type="button" class="btn ghost" data-act="close">Not now</button><button type="button" class="btn primary" data-act="propApply"${n ? "" : " disabled"}>Add ${n} meal${n === 1 ? "" : "s"} to the plan</button>`);
+}
+document.addEventListener("change", (e) => {
+  if (e.target.dataset && e.target.dataset.prop != null && S.prop) { S.prop.keep[Number(e.target.dataset.prop)] = e.target.checked; drawProposal(); }
+});
+
 Object.assign(STRAT_ACTS, {
+  propOpen: (src) => openProposal(src),
+  propApply: async (_, el, busy) => {
+    const items = S.prop.items.filter((x, i) => S.prop.keep[i]).map(({ date, meal, recipe_id, portions }) => ({ date, meal, recipe_id, portions }));
+    if (!items.length) return;
+    busy(true);
+    try { const r = await api("/api/health/plan/apply", { body: { items } }); closeModal(); toast(`Added ${r.added} meal${r.added === 1 ? "" : "s"} to the plan.`); render(); } finally { busy(false); }
+  },
   slotNew: (arg) => { const [d, m] = arg.split("|"); return openPlanNew(d, m); },
   slotOpen: (id) => openSlot(id),
   planPick: (i) => { S.planNew.recipe = S.planNew.list[Number(i)]; planSearch(($("#pn-q") || {}).value || ""); },

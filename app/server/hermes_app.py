@@ -38,7 +38,7 @@ from demo import Demo
 from health import Health, Refused
 from health_log import HealthLog
 from strategy import Strategy
-from mealplan import MealPlan
+from mealplan import MealPlan, ask_max
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
@@ -319,17 +319,17 @@ def make_strategy(cfg, app, health):
     return Strategy(path, health)
 
 
-def make_mealplan(cfg, app, health, hlog):
+def make_mealplan(cfg, app, health, hlog, strategy=None):
     """The meal-plan week, kept in a file next to the strategy (in memory in sample-data mode)."""
     if health is None:
         return None
     if app.demo:
-        return MealPlan(None, health, hlog)
+        return MealPlan(None, health, hlog, strategy)
     path = (cfg.get("health") or {}).get("meal_plan_file")
     if not path:
         near = (cfg.get("foods") or {}).get("store_path") or cfg.get("audit_log")
         path = str(Path(near).with_name("meal-plan.json")) if near else None
-    return MealPlan(path, health, hlog)
+    return MealPlan(path, health, hlog, strategy)
 
 
 def _today_london():
@@ -360,7 +360,7 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
     if strategy is None:
         strategy = make_strategy(cfg, app, health)
     if mealplan is None:
-        mealplan = make_mealplan(cfg, app, health, hlog)
+        mealplan = make_mealplan(cfg, app, health, hlog, strategy)
 
     get_routes = {
         "/api/today": app.today,
@@ -711,13 +711,16 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
 
         def _plan_post(self, user, kind, body):
             """Meal-plan changes. Logging adds the recipe to NutriTrace; cooked goes to CookTrace's diary."""
-            fn = {"add": "add", "change": "change", "log": "log_meal", "cooked": "cooked"}.get(kind)
+            fn = {"add": "add", "change": "change", "log": "log_meal", "cooked": "cooked",
+                  "propose": "propose", "apply": "apply", "ask-max": "ask-max"}.get(kind)
             if fn is None:
                 return None
             if mealplan is None:
                 raise ActionError(503, "Health isn't connected on the server yet.")
             try:
-                out = getattr(mealplan, fn)(body)
+                out = ask_max(mealplan, body, chat) if kind == "ask-max" else getattr(mealplan, fn)(body)
+            except ChatError as e:
+                raise ActionError(e.code, str(e))
             except ValueError as e:
                 raise ActionError(400, str(e))
             except Refused as e:
@@ -725,7 +728,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             except SourceError as e:
                 raise ActionError(503, str(e))
             # Like the other health lines: what kind of change, never what was eaten.
-            app.audit(user, "health_plan_" + kind, {"date": out.get("date")})
+            if kind != "propose":  # the app planner changes nothing; asking Max is logged (data goes to Max)
+                app.audit(user, "health_plan_" + kind.replace("-", "_"), {"date": out.get("date")})
             return {"ok": True, **out, **app.meta()}
 
         def _foods_get(self, what):

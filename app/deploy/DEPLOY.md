@@ -231,6 +231,14 @@ recipe to NutriTrace once as a food ("CookTrace recipe", one serving, nutrition
 divided by the recipe's servings) and logs the portions; "Mark cooked" adds a
 cooked entry to CookTrace's cook diary. Both use the existing write tokens.
 
+"Propose a week" fills the open breakfasts, lunches and dinners from recipes
+with calories, to the Strategy targets (or NutriTrace's goal), with no model
+involved. "Ask Max" sends Max the recipe list, the day targets, what's already
+planned and the expenditure estimate through his chat API, and reads back a
+JSON plan (Craig allowed Max his health and food data on 2026-10-09). Both
+only propose; meals are added when Craig accepts. Asking Max is in the action
+log and is refused while the kill switch is on.
+
 Install: `git pull`, then restart hermes-app. No config change is needed.
 
 ## Phase 5: Inbox (real Gmail, read-only)

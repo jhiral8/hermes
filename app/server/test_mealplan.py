@@ -13,7 +13,9 @@ import hermes_app as h
 from api import App
 from health import Health
 from health_log import HealthLog
-from mealplan import MealPlan
+from mealplan import MealPlan, ask_max, propose_week
+from strategy import Strategy
+from chat import DemoMax
 from test_health import LOGIN, TODAY
 
 
@@ -91,6 +93,92 @@ class Plan(unittest.TestCase):
             mp.change({"id": t["id"], "action": "delete"})
         c = mp.add({"date": TODAY.isoformat(), "meal": "dinner", "recipe_id": 2})
         self.assertEqual(mp.cooked({"id": c["id"]})["recipe"], "Salmon, greens and potatoes")
+
+
+class FakeMax:
+    def __init__(self, answer):
+        self.answer, self.prompts = answer, []
+
+    def open(self, cid, text):
+        self.prompts.append(text)
+        return None
+
+    def events(self, _):
+        for i in range(0, len(self.answer), 7):
+            yield {"type": "text", "delta": self.answer[i:i + 7]}
+        yield {"type": "done"}
+
+
+class FakeChat:
+    def __init__(self, backend, killed=False):
+        self.backend, self.killed = backend, killed
+
+    def _check_kill(self):
+        if self.killed:
+            from chat import ChatError
+            raise ChatError(423, "Agents are stopped.")
+
+
+class Proposals(unittest.TestCase):
+    def setUp(self):
+        demo_health.reset()
+        self.addCleanup(demo_health.reset)
+
+    def test_planner_fits_targets(self):
+        recipes = [{"id": 1, "name": "A", "kcal": 500, "protein": 40}, {"id": 2, "name": "B", "kcal": 400, "protein": 10},
+                   {"id": 3, "name": "C", "kcal": 300, "protein": 30}]
+        out = propose_week(["2026-10-09"], recipes, {"2026-10-09": {"kcal": 2000, "protein": 150}},
+                           {"2026-10-09": {"meals": {"lunch"}, "kcal": 700}})
+        self.assertEqual([x["meal"] for x in out], ["breakfast", "dinner"])
+        self.assertLess(abs(sum(x["kcal"] for x in out) - 1300), 250)
+        self.assertEqual(len({x["recipe_id"] for x in out}), 2)  # no repeat in a day
+        with self.assertRaises(ValueError):
+            propose_week(["2026-10-09"], [{"id": 9, "name": "x", "kcal": None}], {}, {})
+
+    def test_propose_and_apply(self):
+        hl, mp = setup()
+        mp.strategy = Strategy(None, hl)
+        mp.strategy.save({"strategy": {"goal": "maintain", "style": "manual", "kcal": 2400, "diet": "balanced", "gkg": 1.8,
+                                       "fib": 30, "dist": "even", "kg": 80}})
+        mp.add({"date": TODAY.isoformat(), "meal": "dinner", "recipe_id": 1})
+        out = mp.propose({})
+        days = {x["date"] for x in out["items"]}
+        self.assertTrue(all(d >= TODAY.isoformat() for d in days))
+        self.assertNotIn((TODAY.isoformat(), "dinner"), {(x["date"], x["meal"]) for x in out["items"]})
+        self.assertEqual(out["targets"][TODAY.isoformat()], 2400)
+        self.assertEqual(len(mp.view()["slots"]), 1)  # proposing saves nothing
+        r = mp.apply({"items": out["items"]})
+        self.assertEqual(r["added"], len(out["items"]))
+        self.assertEqual(len(mp.view()["slots"]), 1 + len(out["items"]))
+        with self.assertRaises(ValueError):
+            mp.apply({"items": []})
+        with self.assertRaises(ValueError):
+            mp.propose({"week": "2026-09-28"})
+
+    def test_ask_max(self):
+        hl, mp = setup()
+        answer = ('Lots of protein early in the week. {"note": "High protein", "items": ['
+                  '{"date": "2026-10-09", "meal": "dinner", "recipe_id": 3, "portions": 1.5},'
+                  '{"date": "2026-10-10", "meal": "lunch", "recipe_id": "5", "portions": 1},'
+                  '{"date": "2026-10-01", "meal": "lunch", "recipe_id": 5, "portions": 1},'
+                  '{"date": "2026-10-10", "meal": "brunch", "recipe_id": 5, "portions": 1},'
+                  '{"date": "2026-10-10", "meal": "dinner", "recipe_id": 6, "portions": 1}]}')
+        fake = FakeMax(answer)
+        out = ask_max(mp, {}, FakeChat(fake))
+        self.assertEqual([(x["recipe"], x["portions"]) for x in out["items"]],
+                         [("Beef chilli", 1.5), ("Chicken and rice bowl", 1)])
+        self.assertIn("3 suggestions", out["note"])
+        self.assertIn("Overnight oats", fake.prompts[0])
+        self.assertNotIn("Tuna sandwich", fake.prompts[0])  # no calories, so not offered
+        self.assertIn("2300 kcal", fake.prompts[0])  # NutriTrace goal when there's no strategy
+        self.assertEqual(mp.view()["slots"], [])
+        from sources import SourceError
+        with self.assertRaises(SourceError):
+            ask_max(mp, {}, FakeChat(FakeMax("Sorry, can't.")))
+        from chat import ChatError
+        with self.assertRaises(ChatError):
+            ask_max(mp, {}, FakeChat(fake, killed=True))
+        self.assertTrue(ask_max(mp, {}, FakeChat(DemoMax()))["sample"])
 
 
 class Http(unittest.TestCase):
