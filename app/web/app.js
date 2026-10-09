@@ -540,7 +540,7 @@ const CREDITS = [
   ["Fuse.js", "https://github.com/krisk/Fuse", "Typo-tolerant search (bundled)", "Apache-2.0"],
   ["SortableJS", "https://github.com/SortableJS/Sortable", "Drag and drop on the Work board (bundled)", "MIT"],
   ["uPlot", "https://github.com/leeoniya/uPlot", "Weight and expenditure charts (bundled)", "MIT"],
-  ["Open Food Facts", "https://world.openfoodfacts.org", "Product data for barcode lookup", "ODbL"],
+  ["Open Food Facts", "https://world.openfoodfacts.org", "Product data for barcode lookup and food search", "ODbL"],
 ];
 
 async function screenSystem(tab) {
@@ -1121,6 +1121,14 @@ async function act(name, arg, el) {
       return;
     }
     if (name === "logPick") return openLogFood(S.logFoods[Number(arg)]);
+    if (name === "offSearch") return await offSearch(arg, el);
+    if (name === "offPick") {
+      const f = (S.offFoods || [])[Number(arg)];
+      if (!f) return toast("That result isn't on screen any more.");
+      busy(true);
+      try { await addToNt(ntFood(f, f.code)); } finally { busy(false); }
+      return;
+    }
     if (name === "logFoodGo") {
       const f = S.logFood;
       const amt = Number(($("#lf-amt") || {}).value);
@@ -1667,9 +1675,9 @@ async function screenLog(day, meal) {
   S.savedFoods = saved;
   const first = await logSearch("");
   return healthHead("food", "Log food", `<a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a><a class="btn" href="#health/draft/manual">${ic("plus", 16)}New food</a>`,
-      `${MEAL_NAMES[S.log.meal]} · ${dayName(S.log.day)}. Pick a food from NutriTrace, or add a new one.`) + `
+      `${MEAL_NAMES[S.log.meal]} · ${dayName(S.log.day)}. Pick a food from NutriTrace or Open Food Facts, or add a new one.`) + `
     <div class="stack s24">
-      <section class="panel"><div class="field"><label for="log-q">Search your NutriTrace foods</label><input id="log-q" class="inp" type="search" autocomplete="off" placeholder="e.g. oats, chicken, skyr" autofocus></div>
+      <section class="panel"><div class="field"><label for="log-q">Search foods</label><input id="log-q" class="inp" type="search" autocomplete="off" placeholder="e.g. oats, chicken, skyr" autofocus></div>
         <div id="log-res" style="margin-top:12px">${first}</div></section>
       ${saved.length ? `<section class="panel"><div class="panel-h"><h2>Saved here, not in NutriTrace yet</h2></div><div class="list">${saved.map((f) => `<div class="li"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${esc(f.serving || "")}${f.brand ? " · " + esc(f.brand) : ""}</span></span><span class="end"><button type="button" class="btn sm" data-act="savedToNt" data-arg="${esc(f.id)}">Add and log</button></span></div>`).join("")}</div></section>` : ""}
     </div>`;
@@ -1679,8 +1687,28 @@ async function logSearch(q) {
   let d;
   try { d = await api(`/api/health/search/foods?q=${encodeURIComponent(q)}`); } catch (e) { return notConnected("NutriTrace", e.message); }
   S.logFoods = d.foods || [];
-  if (!S.logFoods.length) return `<p class="small muted">${q ? `No NutriTrace food matches “${esc(q)}”. Scan its barcode or add it as a new food.` : "Your NutriTrace catalogue is empty. Scan a barcode or add a new food to start."}</p>`;
-  return `<div class="list">${S.logFoods.map((f, i) => `<button type="button" class="li" data-act="logPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${fmtN(f.portion)} ${esc(f.unit || "")}${f.brand ? " · " + esc(f.brand) : ""} · P ${fmtN(f.protein)} · C ${fmtN(f.carbs)} · F ${fmtN(f.fat)}</span></span><span class="end"><span class="kc">${fmtN(f.kcal)} kcal</span>${ic("plus", 16)}</span></button>`).join("")}</div>${d.total > S.logFoods.length ? `<p class="xs muted">Showing ${S.logFoods.length} of ${fmtN(d.total)}. Type to narrow it down.</p>` : ""}`;
+  const off = q.length >= 2 ? `<div id="log-off" style="margin-top:12px"><button type="button" class="btn" data-act="offSearch" data-arg="${esc(q)}">${ic("search", 16)}Search Open Food Facts for “${esc(q)}”</button></div>` : "";
+  if (!S.logFoods.length) return `<p class="small muted">${q ? `No NutriTrace food matches “${esc(q)}” yet.` : "Your NutriTrace catalogue is empty. Type a food above to search Open Food Facts, scan a barcode, or add a new food."}</p>${off}`;
+  return `<div class="list">${S.logFoods.map((f, i) => `<button type="button" class="li" data-act="logPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${fmtN(f.portion)} ${esc(f.unit || "")}${f.brand ? " · " + esc(f.brand) : ""} · P ${fmtN(f.protein)} · C ${fmtN(f.carbs)} · F ${fmtN(f.fat)}</span></span><span class="end"><span class="kc">${fmtN(f.kcal)} kcal</span>${ic("plus", 16)}</span></button>`).join("")}</div>${d.total > S.logFoods.length ? `<p class="xs muted">Showing ${S.logFoods.length} of ${fmtN(d.total)}. Type to narrow it down.</p>` : ""}${off}`;
+}
+
+// Open Food Facts results, picked to add to NutriTrace and log in one go.
+function offPortion(f) {
+  const b = f.per_serving && f.per_serving.kcal != null && /^\s*[\d.]+\s*(g|ml)\b/i.test(f.serving || "") ? f.per_serving : f.per100;
+  const basis = b === f.per100 ? "per 100 g" : `per ${esc(f.serving)}`;
+  return `${basis} · ${fmtN(b.kcal)} kcal · P ${fmtN(b.protein)} · C ${fmtN(b.carbs)} · F ${fmtN(b.fat)}`;
+}
+async function offSearch(q, el) {
+  const box = $("#log-off");
+  if (el) el.disabled = true;
+  let d;
+  try { d = await api(`/api/health/food-search?q=${encodeURIComponent(q)}`); }
+  catch (e) { if (el) el.disabled = false; return toast(e.message); }
+  S.offFoods = d.items || [];
+  if (!box) return;
+  box.innerHTML = S.offFoods.length
+    ? `<div class="panel-h" style="margin-bottom:4px"><h3 class="small">From Open Food Facts</h3></div><div class="list">${S.offFoods.map((f, i) => `<button type="button" class="li" data-act="offPick" data-arg="${i}" style="width:100%;text-align:left"><span class="main"><span class="t">${esc(f.name)}</span><span class="s">${f.brand ? esc(f.brand) + " · " : ""}${offPortion(f)}</span></span><span class="end">${ic("plus", 16)}</span></button>`).join("")}</div><p class="xs muted">Picking one adds it to NutriTrace, then you choose how much to log.</p>`
+    : `<p class="small muted">Open Food Facts has nothing for “${esc(q)}” with calories. Try other words, scan the barcode, or add it as a new food.</p>`;
 }
 
 function openLogFood(f) {

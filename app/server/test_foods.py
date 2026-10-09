@@ -127,6 +127,48 @@ class Barcodes(unittest.TestCase):
         self.assertFalse(p.product("5099999999991")["found"])
 
 
+class Searching(unittest.TestCase):
+    def test_search_keeps_only_loggable_products_and_is_cached(self):
+        now, clk = clock()
+        calls = []
+        def opener(req, timeout=None):
+            calls.append(req.full_url)
+            return sample_opener(req, timeout)
+        lk = Lookup({"off_enabled": True}, opener=opener, clock=clk)
+        out = lk.search("  Sample   oat ")
+        self.assertEqual(out["query"], "Sample oat")
+        names = [x["name"] for x in out["items"]]
+        self.assertIn("Sample porridge oats", names)
+        self.assertNotIn("Sample oat bar", names)  # no calories
+        self.assertTrue(all(x["source"] == "Open Food Facts" for x in out["items"]))
+        self.assertIn("search_terms=Sample+oat", calls[0])
+        self.assertIn("world.openfoodfacts.org/cgi/search.pl", calls[0])
+        now[0] += 5
+        lk.search("sample OAT")
+        self.assertEqual(len(calls), 1)
+
+    def test_search_refuses_short_long_and_off(self):
+        lk = Lookup({"off_enabled": True}, opener=sample_opener)
+        with self.assertRaises(ValueError):
+            lk.search("a")
+        with self.assertRaises(ValueError):
+            lk.search("x" * 81)
+        with self.assertRaises(SourceError):
+            Lookup({}, opener=sample_opener).search("oats")
+
+    def test_search_spacing_and_errors(self):
+        now, clk = clock()
+        lk = Lookup({"off_enabled": True}, opener=sample_opener, clock=clk)
+        lk.search("yoghurt")
+        with self.assertRaises(SourceError):
+            lk.search("chicken")
+        now[0] += 2
+        self.assertEqual(lk.search("chicken")["items"][0]["name"], "Sample chicken breast fillets")
+        bad = Lookup({"off_enabled": True}, opener=Fake(fail=500))
+        with self.assertRaises(SourceError):
+            bad.search("oats")
+
+
 class Saving(unittest.TestCase):
     def store(self):
         return SavedFoods(Path(tempfile.mkdtemp(), "saved-foods.json"))
@@ -219,6 +261,14 @@ class Http(unittest.TestCase):
         self.assertEqual(body["product"]["name"], "Sample oat drink")
         self.assertEqual(self.call(base, "/api/health/barcode/abc")[0], 400)
         self.assertEqual(self.call(base, "/api/health/barcode/5099999999991")[1]["product"]["found"], False)
+
+    def test_search_route(self):
+        ticks = iter(range(1000, 2000, 5))
+        base = self.serve(Foods(Lookup({"off_enabled": True}, opener=sample_opener, clock=lambda: next(ticks))))
+        status, body = self.call(base, "/api/health/food-search?q=greek%20yoghurt")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["items"][0]["name"], "Sample Greek yoghurt 0%")
+        self.assertEqual(self.call(base, "/api/health/food-search?q=a")[0], 400)
 
     def test_lookup_off_says_so_and_is_503(self):
         base = self.serve(Foods(Lookup({}, opener=sample_opener)))

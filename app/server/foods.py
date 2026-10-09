@@ -25,6 +25,8 @@ from sources import SourceError
 
 OFF_URL = "https://world.openfoodfacts.org/api/v2/product/{code}.json"
 OFF_FIELDS = "product_name,brands,serving_size,nutriments"
+OFF_SEARCH_URL = "https://world.openfoodfacts.org/cgi/search.pl"
+SEARCH_SIZE = 20
 USER_AGENT = "HermesApp/1.0 (personal use)"
 CODE = re.compile(r"\d{8,14}")  # EAN-8, UPC-A, EAN-13, GTIN-14
 NUTS = ("kcal", "protein", "carbs", "fat", "fibre")
@@ -78,31 +80,74 @@ class Lookup:
             if now - self._last < 1.0:
                 raise SourceError("Lookups are going a bit fast. Try again in a moment.")
             self._last = now
-        req = urllib.request.Request(OFF_URL.format(code=code) + "?" + urllib.parse.urlencode({"fields": OFF_FIELDS}),
-                                     headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        data = self._get(OFF_URL.format(code=code) + "?" + urllib.parse.urlencode({"fields": OFF_FIELDS}))
+        if not isinstance(data, dict) or data.get("status") != 1:
+            out = {"found": False, "code": code}  # not cached: it may be added later
+            return out
+        out = _product(data.get("product") or {}, code, now)
+        with self._lock:
+            if len(self._cache) > 500:
+                self._cache.clear()
+            self._cache[code] = (now, out)
+        return out
+
+    def _get(self, url):
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
         try:
             with self._open(req, timeout=self.timeout) as r:
-                data = json.loads(r.read() or b"null")
+                return json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
             raise SourceError(f"Open Food Facts answered {e.code}")
         except (urllib.error.URLError, OSError):
             raise SourceError("Open Food Facts is unreachable")
         except ValueError:
             raise SourceError("Open Food Facts sent something that isn't JSON")
-        if not isinstance(data, dict) or data.get("status") != 1:
-            out = {"found": False, "code": code}  # not cached: it may be added later
-            return out
-        p = data.get("product") or {}
-        n = p.get("nutriments") or {}
-        out = {"found": True, "code": code, "name": (p.get("product_name") or "").strip(),
-               "brand": (p.get("brands") or "").split(",")[0].strip(), "serving": p.get("serving_size") or None,
-               "per100": _nutriments(n, "_100g"), "per_serving": _nutriments(n, "_serving"),
-               "source": "Open Food Facts", "retrieved": datetime.date.fromtimestamp(now).isoformat()}
+
+    def search(self, q):
+        """Food search by name. Only products with calories come back, so each can be logged."""
+        q = " ".join((q or "").split())
+        if len(q) < 2:
+            raise ValueError("Type at least two letters to search.")
+        if len(q) > 80:
+            raise ValueError("That search is too long.")
+        if not self.enabled:
+            raise SourceError("Open Food Facts is off on the server.")
+        key = "q:" + q.lower()
+        now = self._clock()
+        with self._lock:
+            hit = self._cache.get(key)
+            if hit and now - hit[0] < 86400:
+                return hit[1]
+            if now - self._last < 1.0:
+                raise SourceError("Searches are going a bit fast. Try again in a moment.")
+            self._last = now
+        data = self._get(OFF_SEARCH_URL + "?" + urllib.parse.urlencode(
+            {"search_terms": q, "search_simple": 1, "action": "process", "json": 1,
+             "page_size": SEARCH_SIZE, "fields": "code," + OFF_FIELDS}))
+        items = []
+        for p in (data or {}).get("products") or []:
+            if not isinstance(p, dict):
+                continue
+            item = _product(p, str(p.get("code") or ""), now)
+            if not item["name"] or (item["per100"]["kcal"] is None and item["per_serving"]["kcal"] is None):
+                continue
+            if not CODE.fullmatch(item["code"]):
+                item["code"] = ""
+            items.append(item)
+        out = {"query": q, "items": items, "source": "Open Food Facts"}
         with self._lock:
             if len(self._cache) > 500:
                 self._cache.clear()
-            self._cache[code] = (now, out)
+            self._cache[key] = (now, out)
         return out
+
+
+def _product(p, code, now):
+    n = p.get("nutriments") or {}
+    return {"found": True, "code": code, "name": (p.get("product_name") or "").strip(),
+            "brand": (p.get("brands") or "").split(",")[0].strip(), "serving": p.get("serving_size") or None,
+            "per100": _nutriments(n, "_100g"), "per_serving": _nutriments(n, "_serving"),
+            "source": "Open Food Facts", "retrieved": datetime.date.fromtimestamp(now).isoformat()}
 
 
 def _clean_text(v, limit, field):
@@ -206,6 +251,9 @@ class Foods:
     def product(self, code):
         return {"product": self.lookup.product(code)}
 
+    def search(self, q):
+        return self.lookup.search(q)
+
     def saved(self):
         return {"items": self.saved_foods.list()}
 
@@ -214,10 +262,24 @@ class Foods:
 
 
 SAMPLE_CODE = "5000000000017"  # made-up code for sample-data mode
+# Made-up search results for sample-data mode (one has no calories, so it is left out).
+SAMPLE_SEARCH = [
+    {"code": "5000000000024", "product_name": "Sample Greek yoghurt 0%", "brands": "Sample Co", "serving_size": "150 g",
+     "nutriments": {"energy-kcal_100g": 57, "proteins_100g": 10.3, "carbohydrates_100g": 3.6, "fat_100g": 0.2}},
+    {"code": "5000000000031", "product_name": "Sample porridge oats", "brands": "Sample Mill", "serving_size": "40 g",
+     "nutriments": {"energy-kcal_100g": 374, "proteins_100g": 11, "carbohydrates_100g": 60, "fat_100g": 8, "fiber_100g": 9}},
+    {"code": "5000000000048", "product_name": "Sample chicken breast fillets", "brands": "Sample Farm",
+     "nutriments": {"energy-kcal_100g": 106, "proteins_100g": 24, "carbohydrates_100g": 0, "fat_100g": 1.1}},
+    {"code": "5000000000055", "product_name": "Sample oat bar", "brands": "Sample Co", "nutriments": {}},
+]
 
 
 def sample_opener(req, timeout=None):
     """Sample-data stand-in for Open Food Facts: one made-up product, the rest not found."""
+    if "/cgi/search.pl" in req.full_url:
+        q = urllib.parse.parse_qs(req.full_url.split("?", 1)[1]).get("search_terms", [""])[0].lower()
+        found = [p for p in SAMPLE_SEARCH if any(w in p["product_name"].lower() for w in q.split())]
+        return io.BytesIO(json.dumps({"count": len(found), "products": found}).encode())
     code = req.full_url.split("/product/", 1)[-1].split(".json", 1)[0]
     if code != SAMPLE_CODE:
         body = {"status": 0}

@@ -332,6 +332,12 @@ Nothing here goes to Max or any model.
    product (with lookup on), or says "Barcode lookup is off" (with lookup off).
    Saving a food with `POST /api/health/foods` adds it to the file; a second
    `GET /api/health/foods` lists it. `POST` without the X-Hermes-Action header is refused.
+4. Food search by name (Log food, "Search Open Food Facts") uses the same switch
+   and the same host: `world.openfoodfacts.org/cgi/search.pl`, read-only, no key,
+   cached for a day, one call a second shared with barcode lookup. Only products
+   with calories are shown. Picking one adds it to NutriTrace the same way a
+   scanned barcode does. Test: `GET /api/health/food-search?q=greek%20yoghurt`
+   returns `items`; a one-letter query is refused with 400.
 
 ## Library: Max's memory and skills (read-only)
 

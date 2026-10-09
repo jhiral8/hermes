@@ -433,7 +433,7 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._planner_get()
             elif path == "/api/library" or path.startswith("/api/library/skill/"):
                 self._library_get(urllib.parse.unquote(path[len("/api/library/skill/"):]) if "/skill/" in path else None)
-            elif path == "/api/health/foods" or path.startswith("/api/health/barcode/"):
+            elif path in ("/api/health/foods", "/api/health/food-search") or path.startswith("/api/health/barcode/"):
                 self._foods_get(path[len("/api/health/"):])
             elif path.startswith("/api/health/"):
                 self._health_get(path[len("/api/health/"):])
@@ -745,6 +745,9 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             try:
                 if what == "foods":
                     out = self._foods_do(foods.saved if foods else None)
+                elif what == "food-search":
+                    q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "").get("q", [""])[0]
+                    out = self._foods_do(lambda: foods.search(q))
                 else:
                     out = self._foods_do(lambda: foods.product(what[len("barcode/"):]))
             except ActionError as e:
