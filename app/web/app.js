@@ -726,6 +726,7 @@ async function act(name, arg, el) {
       location.hash = "#health/saved";
       return;
     }
+    if (name === "planEvent") return openPlanEvent(arg);
     if (name === "createTask") return openCreateTask();
     if (name === "newChat") { S.chatDraft = ""; location.hash = "max/new"; setTimeout(() => { const b = $("#max-in"); if (b) b.focus(); }, 50); return; }
     if (name === "chatSend") return chatSend();
@@ -1302,28 +1303,102 @@ async function screenInbox(rest) {
 
 const londonToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
 
+const minOf = (iso) => (iso ? +iso.slice(11, 13) * 60 + +iso.slice(14, 16) : 0);
+const hmOf = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const evTime = (e) => (e.all_day ? "All day" : `${hhmm(e.start)}${e.end ? "–" + hhmm(e.end) : ""}`);
+
+// Side-by-side lanes for overlapping events in one day (from the mockup).
+function layoutDay(evs) {
+  const timed = evs.filter((e) => !e.all_day).map((e) => {
+    const s = minOf(e.start), en = e.end && e.end.slice(0, 10) === e.start.slice(0, 10) ? minOf(e.end) : 24 * 60;
+    return { e, s, en: en > s ? en : s + 30 };
+  }).sort((a, b) => a.s - b.s || b.en - a.en);
+  let cluster = [], lanes = [], clusterEnd = -1;
+  const out = [];
+  const flush = () => { cluster.forEach((c) => { c.cols = lanes.length; out.push(c); }); cluster = []; lanes = []; };
+  timed.forEach((t) => {
+    if (t.s >= clusterEnd) flush();
+    let lane = lanes.findIndex((end) => end <= t.s);
+    if (lane < 0) { lane = lanes.length; lanes.push(t.en); } else lanes[lane] = t.en;
+    t.lane = lane; cluster.push(t); clusterEnd = Math.max(clusterEnd, t.en);
+  });
+  flush();
+  return out;
+}
+
+function timeGrid(days, today, week) {
+  const H0 = 7, H1 = 22, HR = days.length === 1 ? 56 : 46, N = days.length;
+  const y = (m) => (Math.min(Math.max(m, H0 * 60), H1 * 60) - H0 * 60) / 60 * HR;
+  const evBtn = (e, cls, style) => `<button type="button" class="tg-ev ev-c-external ${cls}"${style ? ` style="${style}"` : ""} data-act="planEvent" data-arg="${esc(e.key)}" aria-label="${esc(e.title)}, ${esc(evTime(e))}"><b><span class="mk external" aria-hidden="true"></span>${esc(e.title)}</b>${cls === "allday" || (cls === "short" && N > 1) ? "" : `<span>${esc(evTime(e))}</span>`}</button>`;
+  const head = `<div class="tg-head" style="--days:${N}"><div></div>${days.map((d) => `<div class="${d.date === today ? "today" : ""}"><a href="#planner/${week}/${d.date}" style="text-decoration:none;color:inherit;display:block" aria-label="Open ${esc(dayName(d.date))}">${esc(dayShort(d.date))}<b>${+d.date.slice(8)}</b></a></div>`).join("")}</div>`;
+  const allday = `<div class="tg-allday" style="--days:${N}"><div>All day</div>${days.map((d) => `<div>${d.events.filter((e) => e.all_day).map((e) => evBtn(e, "allday")).join("")}</div>`).join("")}</div>`;
+  const hours = [];
+  for (let h = H0 + 1; h < H1; h++) hours.push(`<span style="top:${(h - H0) * HR}px">${String(h).padStart(2, "0")}:00</span>`);
+  const nowM = minOf("0000-00-00T" + nowHHMM());
+  const cols = days.map((d) => {
+    const evs = layoutDay(d.events).map((t) => {
+      const w = 100 / t.cols;
+      const hgt = Math.max(24, y(t.en) - y(t.s) - 3);
+      return evBtn(t.e, hgt < 38 ? "short" : "", `top:${y(t.s) + 1}px;height:${hgt}px;left:calc(${t.lane * w}% + 3px);width:calc(${w}% - 6px)`);
+    }).join("");
+    const now = d.date === today && nowM >= H0 * 60 && nowM <= H1 * 60 ? `<div class="tg-now" style="top:${y(nowM)}px" aria-hidden="true"></div>` : "";
+    return `<div class="tg-col ${d.date === today ? "today" : ""}" style="--hr:${HR}px">${evs}${now}</div>`;
+  }).join("");
+  return `<div class="tg" role="region" aria-label="${N === 1 ? esc(dayName(days[0].date)) : "Week"}">${head}${allday}<div class="tg-body" style="--days:${N};--h:${(H1 - H0) * HR}px"><div class="tg-hours" aria-hidden="true">${hours.join("")}</div>${cols}</div></div>`;
+}
+
 function planEvent(e) {
-  const time = e.all_day ? "All day" : `${esc((e.start || "").slice(11, 16))}${e.end ? "–" + esc(e.end.slice(11, 16)) : ""}`;
-  return `<div class="li"><span class="main"><span class="t">${esc(e.title)}</span>${e.location ? `<span class="s">${esc(e.location)}</span>` : ""}</span>
-    <span class="end small muted">${time}</span></div>`;
+  return `<button type="button" class="ev" data-act="planEvent" data-arg="${esc(e.key)}"><span class="mk external" aria-hidden="true"></span>
+    <span style="flex:1;min-width:0"><b style="font-weight:550">${esc(e.title)}</b>${e.location ? `<span class="xs muted" style="display:block">${esc(e.location)}</span>` : ""}</span>
+    <span class="when">${esc(evTime(e))}</span></button>`;
+}
+
+function openPlanEvent(key) {
+  const e = (S.planEvents || {})[key];
+  if (!e) return;
+  modal(e.title, `<div class="row-flex"><span class="mk external" style="width:12px;height:12px"></span><b>Calendar</b>${badge("line", "Google Calendar")}</div>
+    <dl class="kv"><dt>When</dt><dd>${esc(dayName(e.start.slice(0, 10)))} · ${esc(evTime(e))}</dd><dt>Time zone</dt><dd>Europe/London</dd>${e.location ? `<dt>Where</dt><dd>${esc(e.location)}</dd>` : ""}<dt>Calendar</dt><dd class="mono">${esc(e.calendar)}</dd></dl>
+    <p class="small muted">Read-only here. Change it in Google Calendar.</p>`,
+    `<button type="button" class="btn primary" data-act="close">Close</button>`);
+}
+
+// Overlapping timed events in a day, as pairs.
+function overlaps(days) {
+  const out = [];
+  for (const d of days) {
+    const t = d.events.filter((e) => !e.all_day && e.end);
+    t.forEach((a, i) => t.slice(i + 1).forEach((b) => { if (minOf(a.start) < minOf(b.end) && minOf(b.start) < minOf(a.end)) out.push([d.date, a, b]); }));
+  }
+  return out;
 }
 
 async function screenPlanner(rest) {
   const week = Math.max(-4, Math.min(12, parseInt(rest[0] || "0", 10) || 0));
-  const head = `<div class="ph"><div class="ph-t"><h1>Planner</h1><p class="sub">Your calendar, shown to you only. It never goes to Max or any model.</p></div></div>`;
-  const label = week === 0 ? "This week" : week === 1 ? "Next week" : week === -1 ? "Last week" : null;
-  const start = shiftDay(londonToday(), 7 * week);
-  const d = await inboxApi(`/api/planner?start=${start}&days=7`);
-  const nav = `<div class="btns" style="margin-bottom:12px;align-items:center">
-    <a class="btn ghost sm" href="#planner/${week - 1}" aria-label="Previous week">${ic("back", 14)}</a>
-    <b style="min-width:9em;text-align:center">${esc(label || `${dayName(start)} on`)}</b>
-    <a class="btn ghost sm" href="#planner/${week + 1}" aria-label="Next week">${ic("chev", 14)}</a>
-    ${week ? `<a class="btn ghost sm" href="#planner">Today</a>` : ""}</div>`;
-  if (!d.ok) return head + nav + notConnected("Google Calendar", d.error);
   const today = londonToday();
-  const days = d.days.map((day) => `<section class="panel"><div class="panel-h"><h2>${esc(day.date === today ? "Today, " + dayName(day.date) : dayName(day.date))}</h2></div>
-    <div class="list">${day.events.map(planEvent).join("") || `<p class="small muted">Nothing on.</p>`}</div></section>`).join("");
-  return head + nav + `<div class="stack s24">${days}</div>`;
+  const dow = (new Date(today + "T12:00:00").getDay() + 6) % 7; // Monday = 0
+  const monday = shiftDay(today, 7 * week - dow);
+  const daySel = isoDay(rest[1]);
+  const head = `<div class="ph"><div class="ph-t"><h1>Planner</h1><p class="sub">Your calendar, shown to you only. It never goes to Max or any model.</p></div></div>`;
+  const d = await inboxApi(`/api/planner?start=${monday}&days=7`);
+  const label = week === 0 ? "This week" : week === 1 ? "Next week" : week === -1 ? "Last week" : `${dayName(monday)} – ${dayName(shiftDay(monday, 6))}`;
+  const seg = `<div class="seg" role="group" aria-label="View"><a class="btn sm${daySel ? " ghost" : ""}" href="#planner/${week}"${daySel ? "" : ' aria-current="page"'}>Week</a><a class="btn sm${daySel ? "" : " ghost"}" href="#planner/${week}/${daySel || (week === 0 ? today : monday)}"${daySel ? ' aria-current="page"' : ""}>Day</a></div>`;
+  const nav = `<div class="row-flex">${seg}
+    <div class="btns" style="gap:4px"><a class="iconbtn" href="#planner/${week - 1}" aria-label="Previous week">${ic("back")}</a>
+    <b class="small" style="min-width:9em;text-align:center">${esc(label)}</b>
+    <a class="iconbtn" href="#planner/${week + 1}" aria-label="Next week">${ic("chev")}</a></div>
+    <span class="small muted">Europe/London</span><div class="spacer"></div>${week ? `<a class="btn ghost sm" href="#planner">Today</a>` : ""}</div>`;
+  if (!d.ok) return head + `<div class="stack s24">${nav}${notConnected("Google Calendar", d.error)}</div>`;
+  S.planEvents = {};
+  d.days.forEach((day) => day.events.forEach((e, i) => { e.key = `${day.date}-${i}`; S.planEvents[e.key] = e; }));
+  const sel = d.days.find((x) => x.date === daySel) || d.days.find((x) => x.date === today) || d.days[0];
+  const chips = `<div class="chips">${d.days.map((x) => `<a class="chip" href="#planner/${week}/${x.date}" aria-pressed="${x.date === sel.date}">${esc(dayName(x.date))}</a>`).join("")}</div>`;
+  const dayList = sel.events.length ? `<div class="stack s8">${sel.events.map(planEvent).join("")}</div>`
+    : `<div class="empty"><h3>Nothing on</h3><p>Nothing is in your calendar for ${esc(dayName(sel.date))}.</p></div>`;
+  const clash = overlaps(daySel ? [sel] : d.days).map(([day, a, b]) => `<div class="notice warn">${ic("alert", 16)}<div><b>Overlap on ${esc(dayName(day))}:</b> ${esc(a.title)} (${esc(evTime(a))}) and ${esc(b.title)} (${esc(evTime(b))}).</div></div>`).join("");
+  const legend = `<div class="legend"><span><span class="mk external"></span>Calendar</span></div>`;
+  return head + `<div class="stack s24">${nav}${clash}${legend}
+    <div class="desk-only">${daySel ? `${chips}<div class="cols" style="margin-top:12px">${timeGrid([sel], today, week)}${dayList}</div>` : timeGrid(d.days, today, week)}</div>
+    <div class="phone-only">${chips}<div style="margin-top:12px">${dayList}</div></div></div>`;
 }
 
 /* ---------- router ---------- */

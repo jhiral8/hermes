@@ -43,3 +43,6 @@ a.iconbtn{display:inline-flex;align-items:center;justify-content:center}
 .agenda a.row { text-decoration: none; color: inherit; }
 a.ask-bar { text-decoration: none; }
 a.spark-card { text-decoration: none; color: inherit; }
+.tg-ev.short{display:flex;gap:6px;align-items:baseline;padding-top:2px}
+.tg-ev.short b{flex:0 1 auto;min-width:2em}
+.tg-ev.short > span{flex:0 100 auto;min-width:0}

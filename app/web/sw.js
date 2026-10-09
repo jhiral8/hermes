@@ -2,7 +2,7 @@
 // API calls always go to the network; nothing private is cached here.
 "use strict";
 
-const CACHE = "hermes-shell-v11";
+const CACHE = "hermes-shell-v12";
 const SHELL = [
   "/", "/index.html", "/hermes.css", "/app.css", "/icons.js", "/app.js", "/manifest.webmanifest",
   "/fonts/geist-latin-400-normal.woff2", "/fonts/geist-latin-600-normal.woff2",
