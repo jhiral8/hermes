@@ -1342,6 +1342,7 @@ document.addEventListener("input", (e) => {
     clearTimeout(S.logT);
     S.logT = setTimeout(async () => { const html = await logSearch(q.trim()); if ($("#log-q") && $("#log-q").value === q) $("#log-res").innerHTML = html; }, 250);
   }
+  if (e.target.id === "pn-q") { const q = e.target.value.trim(); clearTimeout(S.pnT); S.pnT = setTimeout(() => planSearch(q), 250); }
   if (e.target.id === "set-q") { const q = e.target.value.trim(); clearTimeout(S.setT); S.setT = setTimeout(() => setSearch(q), 250); }
   if (e.target.id === "lf-amt" && S.logFood) $("#lf-sum").textContent = logSummary(S.logFood, e.target.value).replace(/<[^>]+>/g, "");
   if (e.target.id === "skill-q") {
@@ -1390,7 +1391,7 @@ async function screenHealth(rest) {
   const sub = HEALTH_TABS.some(([k]) => k === rest[0]) ? rest[0] : "food";
   if (sub === "food") return screenFood(isoDay(rest[1]));
   if (sub === "train") return screenTrain();
-  if (sub === "meals") return screenMeals();
+  if (sub === "meals") return rest[1] === "recipes" ? screenMeals() : screenMealPlan(rest[1] === "plan" ? isoDay(rest[2]) : null);
   if (sub === "strategy") return screenStrategy();
   return screenProgress(rest[1] === "7" ? 7 : 14);
 }
@@ -2101,6 +2102,125 @@ document.addEventListener("change", (e) => {
   if (S.prog && /^pg-type-\d+$/.test(id)) { readProg(); drawProgram(); }
 });
 
+/* ---------- Meal plan ----------
+   The week's plan is kept by the app (CookTrace's API can't add planned
+   meals); CookTrace's own planned entries show alongside, read-only. Logging
+   a planned meal adds the recipe to NutriTrace as one serving, then logs the
+   portions. Nothing here goes to Max. */
+
+const PLAN_MEALS = [["breakfast", "Breakfast"], ["lunch", "Lunch"], ["dinner", "Dinner"], ["snack", "Snacks"]];
+const SLOT_ST = { planned: "Planned", logged: "Logged", skipped: "Skipped" };
+const mealsSub = (cur) => `<nav class="tabs sub" aria-label="Meals & Shop">${[["meals", "Meal plan"], ["meals/recipes", "Recipes & shopping"]].map(([k, t]) => `<a href="#health/${k}"${k === cur ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>`;
+const shortDay = (iso) => dayName(iso).split(" ").slice(1).join(" ");
+
+async function screenMealPlan(week) {
+  let v;
+  try {
+    v = await api("/api/health/plan" + (week ? `?week=${encodeURIComponent(week)}` : ""));
+    S.plan = v;
+  } catch (e) { return healthHead("meals", "Meals & Shop") + mealsSub("meals") + notConnected("CookTrace", e.message); }
+  const ct = v.cooktrace_planned.ok ? v.cooktrace_planned.data : [];
+  const cell = (d, meal) => {
+    const mine = v.slots.filter((s) => s.date === d && s.meal === meal);
+    const theirs = ct.filter((x) => x.date === d && x.meal === meal);
+    return mine.map((s) => `<button type="button" class="slot${s.status === "planned" ? " planned" : ""}${s.status === "skipped" ? " skipped" : ""}" data-act="slotOpen" data-arg="${esc(s.id)}"><b>${esc(s.recipe)}</b><span class="st">${SLOT_ST[s.status]}${s.portions !== 1 ? ` · ${s.portions} portions` : ""}${s.per_serving && s.per_serving.kcal ? ` · ${fmtN(s.per_serving.kcal * s.portions)} kcal` : ""}${s.cooked ? " · cooked" : ""}</span></button>`).join("")
+      + theirs.map((x) => `<div class="slot ct" title="Planned in CookTrace"><b>${esc(x.recipe || "Recipe")}</b><span class="st">In CookTrace${x.servings ? ` · ${esc(x.servings)} servings` : ""}</span></div>`).join("")
+      + `<button type="button" class="slot empty" data-act="slotNew" data-arg="${d}|${meal}" aria-label="Plan ${meal} on ${esc(dayName(d))}">+ Plan</button>`;
+  };
+  const dayHead = (d) => `${esc(dayShort(d))} ${esc(shortDay(d))}${d === v.today ? " · Today" : ""}`;
+  const grid = `<div class="week mp-grid" role="table" aria-label="Meal plan ${esc(shortDay(v.week[0]))} to ${esc(shortDay(v.week[6]))}"><div class="wh rl" role="columnheader"></div>${v.week.map((d) => `<div class="wh${d === v.today ? " today" : ""}" role="columnheader">${dayHead(d)}</div>`).join("")}
+    ${PLAN_MEALS.map(([m, l]) => `<div class="rl" role="rowheader">${l}</div>${v.week.map((d) => `<div role="cell" class="mp-cell">${cell(d, m)}</div>`).join("")}`).join("")}</div>`;
+  const dayCard = (d) => `<section class="panel"><h3 style="margin-bottom:8px">${dayHead(d)}</h3><div class="stack s8">${PLAN_MEALS.map(([m, l]) => `<div><div class="xs muted" style="margin-bottom:4px">${l}</div><div class="mp-cell">${cell(d, m)}</div></div>`).join("")}</div></section>`;
+  // On a phone, this week's past days fold away so today is first.
+  const past = v.week.filter((d) => d < v.today);
+  const list = `<div class="stack s16 mp-list">${past.length && past.length < 7 ? `<details class="panel"><summary class="small" style="cursor:pointer">Earlier this week (${past.length} day${past.length === 1 ? "" : "s"})</summary><div class="stack s16" style="margin-top:12px">${past.map(dayCard).join("")}</div></details>` : past.map(dayCard).join("")}${v.week.filter((d) => d >= v.today).map(dayCard).join("")}</div>`;
+  const planned = v.slots.filter((s) => s.status !== "skipped");
+  const kcal = planned.reduce((a, s) => a + (s.per_serving && s.per_serving.kcal ? s.per_serving.kcal * s.portions : 0), 0);
+  return healthHead("meals", "Meals & Shop", `<button type="button" class="btn primary" data-act="slotNew" data-arg="${v.today >= v.week[0] && v.today <= v.week[6] ? v.today : v.week[0]}|dinner">${ic("plus", 16)}Plan a meal</button>`,
+      "Plan meals from your CookTrace recipes. A planned meal counts once you log it.") + mealsSub("meals") + `<div class="stack s16">
+    <div class="row-flex" style="flex-wrap:wrap;gap:12px"><div class="btns" style="gap:4px">
+      <a class="iconbtn" href="#health/meals/plan/${v.prev}" aria-label="Previous week">${ic("back")}</a>
+      <b class="small" style="min-width:130px;text-align:center">${esc(shortDay(v.week[0]))} – ${esc(shortDay(v.week[6]))}</b>
+      <a class="iconbtn" href="#health/meals/plan/${v.next}" aria-label="Next week">${ic("chev")}</a></div>
+      <span class="small muted">${planned.length} meal${planned.length === 1 ? "" : "s"} planned${kcal ? ` · about ${fmtN(kcal)} kcal` : ""}</span></div>
+    ${v.cooktrace_planned.ok ? "" : notConnected("CookTrace's own plan", v.cooktrace_planned.error)}
+    ${grid}${list}
+    <p class="small muted">A planned meal isn't an intake record. Log it to add it to your Food diary in NutriTrace.</p></div>`;
+}
+
+async function openPlanNew(day, meal) {
+  S.planNew = { day, meal, recipe: null, list: [] };
+  modal("Plan a meal", `<div class="form-grid">
+    <div class="field"><label for="pn-day">Day</label><input class="inp" type="date" id="pn-day" value="${esc(day)}"></div>
+    <div class="field"><label for="pn-meal">Meal</label><select class="inp" id="pn-meal">${PLAN_MEALS.map(([k, l]) => `<option value="${k}"${k === meal ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+    <div class="field full"><label for="pn-q">Recipe</label><input class="inp" id="pn-q" type="search" autocomplete="off" placeholder="Search CookTrace recipes" autofocus><div id="pn-res" style="margin-top:8px"></div></div>
+    <div class="field"><label for="pn-por">Portions you'll eat</label><input class="inp num" id="pn-por" inputmode="decimal" value="1"></div>
+  </div>`, `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="planAdd">Add to plan</button>`);
+  planSearch("");
+}
+
+async function planSearch(q) {
+  const box = $("#pn-res");
+  if (!box) return;
+  try {
+    const d = await api(`/api/health/recipes?q=${encodeURIComponent(q)}`);
+    S.planNew.list = d.recipes || [];
+    box.innerHTML = S.planNew.list.length ? `<div class="list" style="max-height:260px;overflow:auto">${S.planNew.list.slice(0, 20).map((r, i) => `<button type="button" class="li" data-act="planPick" data-arg="${i}" aria-pressed="${S.planNew.recipe && S.planNew.recipe.id === r.id}" style="width:100%;text-align:left${S.planNew.recipe && S.planNew.recipe.id === r.id ? ";background:var(--fill)" : ""}"><span class="main"><span class="t">${esc(r.name)}</span><span class="s">${r.kcal ? fmtN(r.kcal) + " kcal a serving · P " + fmtN(r.protein) + " g" : "No calories in CookTrace yet"}${r.servings ? " · makes " + esc(r.servings) : ""}</span></span>${S.planNew.recipe && S.planNew.recipe.id === r.id ? ic("check") : ""}</button>`).join("")}</div>`
+      : `<p class="small muted">${q ? `No recipe matches “${esc(q)}”.` : "No recipes in CookTrace yet."}</p>`;
+  } catch (e) { box.innerHTML = notConnected("CookTrace", e.message); }
+}
+
+function openSlot(id) {
+  const s = (S.plan && S.plan.slots || []).find((x) => x.id === id);
+  if (!s) return;
+  const ps = s.per_serving || {};
+  const canLog = s.status === "planned" && s.date <= S.plan.today && s.date >= S.plan.can_log_from;
+  const label = (PLAN_MEALS.find(([k]) => k === s.meal) || [, s.meal])[1];
+  modal(`${label} · ${dayName(s.date)}`, `<div class="row-flex" style="gap:10px"><h3 style="flex:1">${esc(s.recipe)}</h3>${badge(s.status === "logged" ? "ok" : s.status === "skipped" ? "" : "info", SLOT_ST[s.status])}</div>
+    <dl class="kv" style="margin-top:12px"><dt>Portions</dt><dd>${esc(s.portions)}${s.servings ? ` of the ${esc(s.servings)} it makes` : ""}</dd>
+    <dt>Per portion</dt><dd>${ps.kcal ? `${fmtN(ps.kcal)} kcal · P ${fmtN(ps.protein)} · C ${fmtN(ps.carbs)} · F ${fmtN(ps.fat)} g` : "No calories in CookTrace yet"}</dd>
+    ${s.cooked ? "<dt>Cooked</dt><dd>Recorded in CookTrace</dd>" : ""}${s.note ? `<dt>Note</dt><dd>${esc(s.note)}</dd>` : ""}</dl>
+    ${s.status === "planned" && !canLog ? `<p class="small muted" style="margin-top:10px">${s.date > S.plan.today ? "You can log it on the day." : "It's too far back to log from here."}</p>` : ""}`,
+    `${s.status === "planned" ? `<button type="button" class="btn ghost" data-act="slotDo" data-arg="skip|${esc(id)}">Skip</button>` : s.status === "skipped" ? `<button type="button" class="btn ghost" data-act="slotDo" data-arg="unskip|${esc(id)}">Plan again</button>` : ""}
+     ${s.status !== "logged" ? `<button type="button" class="btn ghost" data-act="slotDo" data-arg="remove|${esc(id)}">Remove</button>` : ""}
+     ${s.date <= S.plan.today && !s.cooked && s.status !== "skipped" ? `<button type="button" class="btn" data-act="slotCooked" data-arg="${esc(id)}">Mark cooked</button>` : ""}
+     ${canLog ? `<button type="button" class="btn primary" data-act="slotLog" data-arg="${esc(id)}">Log ${esc(s.portions)} portion${s.portions === 1 ? "" : "s"}</button>` : `<button type="button" class="btn" data-act="close">Close</button>`}`);
+}
+
+Object.assign(STRAT_ACTS, {
+  slotNew: (arg) => { const [d, m] = arg.split("|"); return openPlanNew(d, m); },
+  slotOpen: (id) => openSlot(id),
+  planPick: (i) => { S.planNew.recipe = S.planNew.list[Number(i)]; planSearch(($("#pn-q") || {}).value || ""); },
+  planAdd: async (_, el, busy) => {
+    const p = S.planNew;
+    if (!p.recipe) return toast("Pick a recipe first.");
+    const portions = Number($("#pn-por").value);
+    if (!(portions >= 0.25 && portions <= 10)) return toast("Portions go from 0.25 to 10.");
+    busy(true);
+    try {
+      const s = await api("/api/health/plan/add", { body: { date: $("#pn-day").value, meal: $("#pn-meal").value, recipe_id: p.recipe.id, portions } });
+      closeModal();
+      toast(`Planned ${s.recipe} for ${dayName(s.date)}.`);
+      const monday = shiftDay(s.date, -((new Date(s.date + "T12:00:00").getDay() + 6) % 7));
+      const want = `#health/meals/plan/${monday}`;
+      if (location.hash === want || (location.hash === "#health/meals" && S.plan && S.plan.week[0] === monday)) render(); else location.hash = want;
+    } finally { busy(false); }
+  },
+  slotDo: async (arg, el, busy) => {
+    const [action, id] = arg.split("|");
+    busy(true);
+    try { await api("/api/health/plan/change", { body: { id, action } }); closeModal(); toast(action === "remove" ? "Removed from the plan." : action === "skip" ? "Marked skipped." : "Planned again."); render(); } finally { busy(false); }
+  },
+  slotLog: async (id, el, busy) => {
+    busy(true);
+    try { const r = await api("/api/health/plan/log", { body: { id } }); closeModal(); toast(`Logged ${r.recipe} to ${r.meal} (${fmtN(r.kcal)} kcal).`); render(); } finally { busy(false); }
+  },
+  slotCooked: async (id, el, busy) => {
+    busy(true);
+    try { const r = await api("/api/health/plan/cooked", { body: { id } }); closeModal(); toast(`Recorded ${r.recipe} as cooked in CookTrace.`); render(); } finally { busy(false); }
+  },
+});
+
 /* ---------- Meals & Shop ---------- */
 
 async function screenMeals() {
@@ -2108,7 +2228,7 @@ async function screenMeals() {
   if (!d) return healthDown("meals", "Meals & Shop");
   const links = d.links || {};
   const head = healthHead("meals", "Meals & Shop", appLink(links.cooktrace, "Open CookTrace", "btn"),
-    "Plan meals, cook batches and shop for what's missing. Read-only for now.");
+    "Recipes, recent cooking and the shopping list from CookTrace.") + mealsSub("meals/recipes");
   const section = (title, part, render) => `<section class="panel"><h2 style="margin-bottom:8px">${title}</h2>${part && part.ok ? render(part.data) : notConnected("CookTrace", part && part.error)}</section>`;
   const byDay = (items) => {
     const groups = {};
@@ -2122,7 +2242,7 @@ async function screenMeals() {
     return Object.keys(groups).map((a) => `<div class="eyebrow" style="margin-top:12px">${esc(a)}</div><div class="list">${groups[a].map((x) =>
       `<div class="li${x.checked ? " muted" : ""}"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.quantity != null ? esc(x.quantity) + (x.unit ? " " + esc(x.unit) : "") : ""}</span></span><span class="end">${x.checked ? `<span class="badge ok">Bought</span>` : ""}</span></div>`).join("")}</div>`).join("") || `<p class="small muted">Shopping list is empty.</p>`;
   };
-  const recipes = (data) => `<div class="list">${data.items.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.servings ? esc(x.servings) + " servings" : ""}${x.kcal ? " · " + fmtN(x.kcal) + " kcal" : ""}</span></span></div>`).join("")}</div>${data.total > data.items.length ? `<p class="xs muted">Showing ${data.items.length} of ${fmtN(data.total)}.</p>` : ""}`;
+  const recipes = (data) => `<div class="list">${data.items.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.name)}</span><span class="s">${x.servings ? esc(x.servings) + " servings" : ""}${x.kcal ? " · " + fmtN(x.kcal) + " kcal a serving" : ""}</span></span></div>`).join("")}</div>${data.total > data.items.length ? `<p class="xs muted">Showing ${data.items.length} of ${fmtN(data.total)}.</p>` : ""}`;
 
   return head + `<div class="stack s24">
     <div class="cols even">

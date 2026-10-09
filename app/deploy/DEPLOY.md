@@ -222,6 +222,17 @@ Nothing is sent to NutriTrace or to Max.
 
 Install: `git pull`, then restart hermes-app. No config change is needed.
 
+## Meal-plan week
+
+The plan is kept by the app in `meal-plan.json` next to `strategy.json` (or
+`health.meal_plan_file`). CookTrace's API can't add planned meals, so its own
+planned entries are shown read-only alongside. Logging a planned meal adds the
+recipe to NutriTrace once as a food ("CookTrace recipe", one serving, nutrition
+divided by the recipe's servings) and logs the portions; "Mark cooked" adds a
+cooked entry to CookTrace's cook diary. Both use the existing write tokens.
+
+Install: `git pull`, then restart hermes-app. No config change is needed.
+
 ## Phase 5: Inbox (real Gmail, read-only)
 
 Craig's own mail, shown only to him in the app. Read-only: the app calls

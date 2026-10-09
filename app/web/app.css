@@ -61,3 +61,11 @@ a.spark-card { text-decoration: none; color: inherit; }
 .st-wk td, .st-wk th { white-space: nowrap; }
 .st-wk .st-tr { color: var(--fg-3); vertical-align: -2px; }
 @media (max-width: 560px) { .st-wk td, .st-wk th { padding-left: 6px; padding-right: 6px; font-size: 13px; } }
+/* Meal plan: a week grid on wide screens, a list of days on phones */
+.mp-cell { display: flex; flex-direction: column; gap: 6px; }
+.slot .st { display: block; color: var(--fg-3); font-size: 12px; margin-top: 2px; }
+.slot.skipped { opacity: .55; text-decoration: line-through; }
+.slot.ct { cursor: default; background: var(--fill); }
+.slot.empty { min-height: 34px; }
+.mp-list { display: none; }
+@media (max-width: 900px) { .mp-grid { display: none; } .mp-list { display: flex; } }

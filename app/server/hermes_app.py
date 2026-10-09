@@ -38,6 +38,7 @@ from demo import Demo
 from health import Health, Refused
 from health_log import HealthLog
 from strategy import Strategy
+from mealplan import MealPlan
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
@@ -318,11 +319,24 @@ def make_strategy(cfg, app, health):
     return Strategy(path, health)
 
 
+def make_mealplan(cfg, app, health, hlog):
+    """The meal-plan week, kept in a file next to the strategy (in memory in sample-data mode)."""
+    if health is None:
+        return None
+    if app.demo:
+        return MealPlan(None, health, hlog)
+    path = (cfg.get("health") or {}).get("meal_plan_file")
+    if not path:
+        near = (cfg.get("foods") or {}).get("store_path") or cfg.get("audit_log")
+        path = str(Path(near).with_name("meal-plan.json")) if near else None
+    return MealPlan(path, health, hlog)
+
+
 def _today_london():
     return Health({}).today()
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None):
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -345,6 +359,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
     hlog = HealthLog(health) if health is not None else None
     if strategy is None:
         strategy = make_strategy(cfg, app, health)
+    if mealplan is None:
+        mealplan = make_mealplan(cfg, app, health, hlog)
 
     get_routes = {
         "/api/today": app.today,
@@ -473,6 +489,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     result = self._foods_do(lambda: foods.save(body))
                 elif parts[:2] == ["api", "health"] and len(parts) == 3 and parts[2] in ("strategy", "checkin", "program"):
                     result = self._strategy_post(user, parts[2], body)
+                elif parts[:3] == ["api", "health", "plan"] and len(parts) == 4:
+                    result = self._plan_post(user, parts[3], body)
                 elif parts[:3] == ["api", "health", "log"] and len(parts) == 4:
                     result = self._health_log(user, parts[3], body)
                 else:
@@ -600,6 +618,18 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     if out is None:
                         self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
                         return
+                elif what in ("plan", "recipes"):
+                    if mealplan is None:
+                        self._json(503, {"ok": False, "error": "Health isn't connected on the server yet.", **app.meta()})
+                        return
+                    arg = (q.get("week" if what == "plan" else "q") or [None])[0]
+                    if what == "plan" and arg is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", arg):
+                        raise ValueError
+                    try:
+                        out = mealplan.view(arg) if what == "plan" else {"recipes": mealplan.recipes(arg)}
+                    except SourceError as e:
+                        self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                        return
                 elif what in ("search/foods", "search/exercises"):
                     term = (q.get("q") or [""])[0]
                     try:
@@ -677,6 +707,25 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             out = self._strategy_do(lambda: fn(body))
             detail = {"choice": body.get("action")} if kind == "checkin" else {}
             app.audit(user, "health_" + kind, detail)
+            return {"ok": True, **out, **app.meta()}
+
+        def _plan_post(self, user, kind, body):
+            """Meal-plan changes. Logging adds the recipe to NutriTrace; cooked goes to CookTrace's diary."""
+            fn = {"add": "add", "change": "change", "log": "log_meal", "cooked": "cooked"}.get(kind)
+            if fn is None:
+                return None
+            if mealplan is None:
+                raise ActionError(503, "Health isn't connected on the server yet.")
+            try:
+                out = getattr(mealplan, fn)(body)
+            except ValueError as e:
+                raise ActionError(400, str(e))
+            except Refused as e:
+                raise ActionError(400, str(e))
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            # Like the other health lines: what kind of change, never what was eaten.
+            app.audit(user, "health_plan_" + kind, {"date": out.get("date")})
             return {"ok": True, **out, **app.meta()}
 
         def _foods_get(self, what):

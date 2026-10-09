@@ -56,6 +56,23 @@ def nutrients(obj):
     return {name: _find(obj or {}, keys) for name, keys in NUTRIENTS.items()}
 
 
+def per_serving(recipe):
+    """CookTrace stores a recipe's nutrition for the whole recipe; split it by servings."""
+    servings = recipe.get("servings")
+    try:
+        servings = float(servings)
+    except (TypeError, ValueError):
+        servings = 1.0
+    if not servings > 0:
+        servings = 1.0
+    total = nutrients(recipe.get("nutrition") or {})
+    return {k: (round(v / servings, 1) if v is not None else None) for k, v in total.items()}
+
+
+class NotFound(SourceError):
+    """The Trace app answered, and the item asked for doesn't exist."""
+
+
 class TraceApp:
     """One Trace app's /api/v1, with a small time-based cache."""
 
@@ -94,6 +111,12 @@ class TraceApp:
             with self._open(req, timeout=self.timeout) as r:
                 data = json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
+            if e.code == 404:
+                try:
+                    if (json.loads(e.read() or b"{}") or {}).get("code") == "not_found":
+                        raise NotFound(f"{self.name} has no such item")
+                except (ValueError, AttributeError):
+                    pass
             why = {401: "refused the token", 403: "token lacks the scope", 404: "public API not enabled",
                    429: "rate limited"}.get(e.code, f"answered {e.code}")
             raise SourceError(f"{self.name} {why}")
@@ -378,7 +401,7 @@ class Health:
             ct = self._need(self.ct, "CookTrace")
             r = ct.get("/recipes", ttl=300, limit=24) or {}
             return {"total": r.get("total"), "items": [{"id": x.get("id"), "name": x.get("name"),
-                                                        "servings": x.get("servings"), **nutrients(x.get("nutrition") or {})}
+                                                        "servings": x.get("servings"), **per_serving(x)}
                                                        for x in r.get("items") or []]}
 
         return {"planned": _section(lambda: diary("planned")), "cooked": _section(lambda: diary("cooked")),

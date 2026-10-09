@@ -91,6 +91,16 @@ def _exercises():
     return list(seen.values())
 
 
+# CookTrace keeps nutrition for the whole recipe, not per serving.
+RECIPES = [
+    {"id": 1, "name": "Chicken tikka traybake", "servings": 4, "nutrition": {"calories": 2080, "proteins": 180, "carbohydrates": 152, "fat": 72, "fiber": 24}},
+    {"id": 2, "name": "Salmon, greens and potatoes", "servings": 2, "nutrition": {"calories": 1220, "proteins": 80, "carbohydrates": 90, "fat": 52, "fiber": 14}},
+    {"id": 3, "name": "Beef chilli", "servings": 6, "nutrition": {"calories": 2880, "proteins": 228, "carbohydrates": 240, "fat": 96, "fiber": 60}},
+    {"id": 4, "name": "Overnight oats", "servings": 1, "nutrition": {"calories": 390, "proteins": 28, "carbohydrates": 48, "fat": 9, "fiber": 8}},
+    {"id": 5, "name": "Chicken and rice bowl", "servings": 2, "nutrition": {"calories": 1300, "proteins": 92, "carbohydrates": 134, "fat": 44, "fiber": 8}},
+    {"id": 6, "name": "Tuna sandwich", "servings": 1, "nutrition": {}}]
+
+
 def write(host, path, body):
     parts = path.strip("/").split("/")
     if host.startswith("nutritrace") and parts == ["foods"]:
@@ -120,6 +130,11 @@ def write(host, path, body):
         if ex is None:
             raise _http(400, {"error": f"No exercise with id {body['exercise_id']} in the catalog."})
         return {"ok": True, "date": parts[1], "exercise_id": ex["id"], "exercise_name": ex["name"], "sets_on_exercise": 1}
+    if host.startswith("cooktrace") and parts == ["cook-diary"]:
+        r = next((x for x in RECIPES if x["id"] == body.get("recipe_id")), None)
+        if r is None:
+            raise _http(400, {"error": f"recipe_id {body.get('recipe_id')} not found."})
+        return {"ok": True, "logged": {"date": body.get("date"), "recipe_id": r["id"], "recipe_name": r["name"], "kind": "cooked"}}
     raise ValueError("no sample write for " + host + path)
 
 
@@ -195,15 +210,18 @@ def answer(host, path, q, today):
                 {"name": "Overhead press", "maxWeight": 47.5, "maxReps": 8, "e1rm": 60.2, "date": (today - datetime.timedelta(days=17)).isoformat()}]}
     if host.startswith("cooktrace"):
         if parts[0] == "recipes":
-            return {"total": 4, "items": [
-                {"id": "r1", "name": "Chicken tikka traybake", "servings": 4, "nutrition": {"calories": 520, "proteins": 45, "carbohydrates": 38, "fat": 18}},
-                {"id": "r2", "name": "Salmon, greens and potatoes", "servings": 2, "nutrition": {"calories": 610, "proteins": 40, "carbohydrates": 45, "fat": 26}},
-                {"id": "r3", "name": "Beef chilli", "servings": 6, "nutrition": {"calories": 480, "proteins": 38, "carbohydrates": 40, "fat": 16}},
-                {"id": "r4", "name": "Overnight oats", "servings": 1, "nutrition": {"calories": 390, "proteins": 28, "carbohydrates": 48, "fat": 9}}]}
+            if len(parts) > 1:
+                r = next((x for x in RECIPES if str(x["id"]) == parts[1]), None)
+                if r is None:
+                    raise _http(404, {"error": "not_found", "code": "not_found"})
+                return r
+            term = (q.get("q") or "").lower()
+            items = [r for r in RECIPES if term in r["name"].lower()]
+            return {"total": len(items), "items": items}
         if parts[0] == "cook-diary":
             start = datetime.date.fromisoformat(q["date_from"])
             end = datetime.date.fromisoformat(q["date_to"])
-            names = [("r1", "Chicken tikka traybake"), ("r2", "Salmon, greens and potatoes"), ("r3", "Beef chilli")]
+            names = [(1, "Chicken tikka traybake"), (2, "Salmon, greens and potatoes"), (3, "Beef chilli")]
             items, d, k = [], start, 0
             while d <= end:
                 if (q["kind"] == "planned" and d >= today) or (q["kind"] == "cooked" and d < today and d.weekday() in (0, 2, 5)):
@@ -249,4 +267,4 @@ def sample_config():
     return {"estimator_file": sample_estimator(),
             "nutritrace": {"url": "http://nutritrace.sample", "key": "sample", "write_key": "sample", "web_url": None},
             "lifttrace": {"url": "http://lifttrace.sample", "key": "sample", "write_key": "sample", "web_url": None},
-            "cooktrace": {"url": "http://cooktrace.sample", "key": "sample", "web_url": None}}
+            "cooktrace": {"url": "http://cooktrace.sample", "key": "sample", "write_key": "sample", "web_url": None}}
