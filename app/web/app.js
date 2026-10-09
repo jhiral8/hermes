@@ -175,43 +175,90 @@ function issueRow(i) {
   return `<a class="li" href="#work/${esc(i.id)}"><span class="main"><span class="t">${i.running ? '<span class="pulse" aria-hidden="true"></span> ' : ""}${i.ref ? `<span class="mono muted">${esc(i.ref)}</span> ` : ""}${esc(i.title)}</span><span class="s">${esc(bits.join(" · "))}</span></span><span class="end">${badge(ISSUE_BADGE[i.status], i.status_text || ISSUE_TEXT[i.status] || i.status)}</span></a>`;
 }
 
+// Calorie ring for Today (from the mockup).
+function ring(val, target) {
+  const r = 58, C = 2 * Math.PI * r, a = target ? Math.min(1, (val || 0) / target) : 0;
+  return `<div class="ring" role="img" aria-label="${esc(fmtN(val))} of ${esc(fmtN(target))} kcal">
+    <svg viewBox="0 0 136 136" aria-hidden="true"><circle cx="68" cy="68" r="${r}" fill="none" stroke="var(--fill-2)" stroke-width="11"/>
+    <circle cx="68" cy="68" r="${r}" fill="none" stroke="var(--accent)" stroke-width="11" stroke-linecap="round" stroke-dasharray="${Math.max(0.001, a * C)} ${C}"/></svg>
+    <div class="c"><b>${fmtN(val)}</b><span>of ${fmtN(target)} kcal</span></div></div>`;
+}
+
+const hhmm = (iso) => (iso || "").slice(11, 16);
+const nowHHMM = () => new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
+
+// Today's calendar as an agenda with a "now" line (from the mockup).
+function agendaRows(events) {
+  const now = nowHHMM(), rows = [];
+  let placed = false;
+  const line = `<div class="now" aria-label="Now ${now}"><span>${now} now</span><i></i></div>`;
+  for (const e of events) {
+    if (!placed && !e.all_day && hhmm(e.start) > now) { rows.push(line); placed = true; }
+    const time = e.all_day ? "All day" : `${hhmm(e.start)}${e.end ? "–" + hhmm(e.end) : ""}`;
+    const past = !e.all_day && e.end && hhmm(e.end) < now;
+    rows.push(`<a class="row${past ? " past" : ""}" href="#planner"><span class="t">${esc(time)}</span><span class="mk external" aria-hidden="true"></span><span><b>${esc(e.title)}</b><small>${esc(e.location || "Calendar")}</small></span><span class="end xs muted"></span></a>`);
+  }
+  if (!placed) rows.push(line);
+  return rows.join("");
+}
+
 async function screenToday() {
-  const d = await load("today", "/api/today");
+  const [d, f, p] = await Promise.all([
+    load("today", "/api/today"),
+    healthData("food:today", "food"),
+    inboxApi(`/api/planner?start=${londonToday()}&days=1`),
+  ]);
   const status = (d && d.status && d.status.services) || [];
   const down = status.filter((s) => s.state === "down" && s.id !== "kill");
   const kill = status.find((s) => s.id === "kill");
   const waiting = (d && d.waiting) || [];
   const now = new Date();
   const name = ((S.me && S.me.name) || "Craig").split(" ")[0];
-  const sp = d && d.spending && d.spending.max && d.spending.max.ok ? d.spending.max.data : null;
+
+  const goals = f && f.goals && f.goals.ok ? f.goals.data : {};
+  const t = f && f.day && f.day.ok ? f.day.data.totals : null;
+  const left = t && goals.kcal ? Math.max(0, goals.kcal - t.kcal) : null;
+  const links = (f && f.links) || {};
+  const food = `<section class="panel a-food" aria-labelledby="h-food">
+    <div class="panel-h"><h2 id="h-food">Food today</h2><div class="r"><a class="btn ghost sm" href="#health/food">Open Food ${ic("chev", 16)}</a></div></div>
+    ${!f ? notConnected("Health", "Couldn't reach the server.") : !t ? notConnected("NutriTrace", f.day && f.day.error) : `<div class="food-hero">${ring(t.kcal, goals.kcal)}
+      <div class="stack s8" style="gap:14px;width:100%"><p class="small muted">${left != null ? `${fmtN(left)} kcal left · fixed target` : "No calorie target set"}</p>
+        <div class="macros">${[["protein", "Protein"], ["carbs", "Carbs"], ["fat", "Fat"], ["fibre", "Fibre"]].map(([k, l]) => `<div class="macro"><div class="l"><span>${l}</span><span>${fmtN(t[k])}<span class="muted" style="font-weight:400"> / ${fmtN(goals[k])} g</span></span></div>${hBar(t[k], goals[k])}</div>`).join("")}</div></div></div>`}
+    <div class="btns" style="margin-top:16px">${appLink(links.nutritrace, "Log food", "btn primary")}<a class="btn" href="#health/scan">${ic("camera", 16)}Scan a barcode</a><a class="btn" href="#health/train">${ic("dumbbell", 16)}Training</a></div>
+  </section>`;
+
+  const events = p && p.ok && p.days && p.days[0] ? p.days[0].events : [];
+  const next = events.find((e) => !e.all_day && hhmm(e.start) > nowHHMM());
+  const plan = `<section class="panel a-next" aria-labelledby="h-plan"><div class="panel-h"><h2 id="h-plan">Today's plan</h2><span class="xs muted">Europe/London</span><div class="r"><a class="btn ghost sm" href="#planner">Planner ${ic("chev", 16)}</a></div></div>
+    ${p && !p.ok ? notConnected("Google Calendar", p.error) : events.length ? `<div class="agenda">${agendaRows(events)}</div>` : `<div class="empty"><h3>Nothing on today</h3><p>Your calendar is clear.</p></div>`}</section>`;
+
   return `
   <div class="ph"><div class="ph-t">
     <div class="eyebrow">${esc(now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: TZ }))} · ${esc(when(now.toISOString(), false))}</div>
     <h1>${greeting()}, ${esc(name)}</h1>
     <div class="summary-line">
-      <span><b>${d && d.waiting_ok ? waiting.length : "?"}</b> decisions waiting</span>
+      <span><b>${d && d.waiting_ok ? waiting.length : "?"}</b> decision${waiting.length === 1 ? "" : "s"} waiting</span>
+      ${next ? `<span>Next: <b>${esc(next.title)}</b> at ${esc(hhmm(next.start))}</span>` : ""}
       <span><b>${d && d.work_ok ? d.needs_you : "?"}</b> ${d && d.needs_you === 1 ? "task needs" : "tasks need"} you</span>
-      <span>${down.length ? `<b>${down.length}</b> ${down.length === 1 ? "service" : "services"} down` : status.length ? "<b>All</b> services up" : "Server status unknown"}</span>
-      ${sp && sp.today_usd != null ? `<span><b>${esc(usd(sp.today_usd))}</b> Max today</span>` : ""}
+      ${left != null ? `<span><b>${fmtN(left)}</b> kcal left</span>` : ""}
+      ${down.length ? `<span><b>${down.length}</b> ${down.length === 1 ? "service" : "services"} down</span>` : ""}
     </div>
   </div></div>
-  <button type="button" class="ask-bar" data-act="soonMax">${ic("chat")}<span>Ask Max or start a discussion… (Phase 3)</span></button>
+  <a class="ask-bar" href="#max/new">${ic("chat")}<span>Ask Max or start a discussion…</span></a>
   ${kill && kill.state === "down" ? `<div class="notice err" role="status" style="margin-bottom:16px">${ic("stop")}<div><b>All agent work is stopped.</b> The kill switch is on. Resume it from your Mac.</div></div>` : ""}
-  <div class="bento bento-p2">
+  <div class="bento">
+    ${food}
     <section class="panel a-dec" aria-labelledby="h-dec">
       <div class="panel-h"><h2 id="h-dec">Waiting for you</h2>${waiting.length ? `<span class="badge accent">${waiting.length}</span>` : ""}<div class="r"><a class="btn ghost sm" href="#approvals">Approvals ${ic("chev", 16)}</a></div></div>
       ${d && !d.waiting_ok ? notConnected("Part of approvals", (d.waiting_errors || []).join("; ")) : ""}
-      ${waiting.length ? `<div class="list">${waiting.map((a) => approvalRow(a)).join("")}</div>` : d && d.waiting_ok ? `<p class="small muted">Nothing waiting. Email sends and board decisions appear here.</p>` : ""}
+      ${waiting.length ? `<div class="list">${waiting.map((a) => approvalRow(a)).join("")}</div>` : d && d.waiting_ok ? `<div class="empty"><h3>Nothing waiting for review</h3><p>Email sends and board decisions appear here.</p></div>` : ""}
     </section>
+    ${f ? weekPanel(f, f.today, "today") : ""}
+    ${plan}
     <section class="panel a-team" aria-labelledby="h-team">
       <div class="panel-h"><h2 id="h-team">Team work</h2><div class="r"><a class="btn ghost sm" href="#work">Work ${ic("chev", 16)}</a></div></div>
       ${d && !d.work_ok ? notConnected("The Paperclip board", "") : ""}
       ${d && d.work && d.work.length ? `<div class="list">${d.work.map(issueRow).join("")}</div>` : d && d.work_ok ? `<p class="small muted">No open tasks. Use New task to give an agent something to do.</p>` : ""}
-    </section>
-    <section class="panel a-sys" aria-labelledby="h-sys">
-      <div class="panel-h"><h2 id="h-sys">Server</h2><div class="r"><a class="btn ghost sm" href="#system/status">System ${ic("chev", 16)}</a></div></div>
-      ${statusList(status.slice(0, 6))}
-      ${d && d.status ? `<p class="xs muted" style="margin-top:8px">Checked at ${esc(when(new Date(d.status.checked_at * 1000).toISOString(), false))}</p>` : `<p class="small muted">Can't reach the server.</p>`}
     </section>
     <section class="panel flat a-brief" aria-labelledby="h-brief">
       <div class="panel-h"><h2 id="h-brief">Morning brief</h2>${badge("", "Locked")}</div>
@@ -834,17 +881,13 @@ async function screenHealth(rest) {
 
 /* ---------- Food ---------- */
 
-async function screenFood(day) {
-  const d = await healthData("food:" + (day || "today"), "food" + (day ? `?day=${encodeURIComponent(day)}` : ""));
-  if (!d) return healthDown("food", "Food");
-  const links = d.links || {};
-  const cur = d.day && d.day.ok ? d.day.data.date : d.today;
+// Weekly nutrition panel (Food and Today). base is the hash prefix for day links.
+function weekPanel(d, cur, base = "health/food") {
   const goals = d.goals && d.goals.ok ? d.goals.data : {};
   const week = d.week && d.week.ok ? d.week.data : [];
   const monday = week.length ? week[0].date : cur;
   const nextWeek = shiftDay(monday, 7);
   const sel = week.find((r) => r.date === cur) || { date: cur, status: "open" };
-
   const cellFor = (row, [k, label, unit, col]) => {
     const goal = goals[k];
     const v = row.status === "future" || row.status === "none" ? null : row[k];
@@ -861,18 +904,35 @@ async function screenFood(day) {
     return `<div class="g-num"><span class="g-lab">${label}</span><b class="num">${fmtN(v)}${unit === "g" ? "<small> g</small>" : ""}</b><span class="g-sub">${goals[k] ? "of " + fmtN(goals[k]) : ""}</span></div>`;
   }).join("");
   const logged = week.filter((r) => r.status === "logged").length;
-  const weekNav = `<div class="btns" style="gap:4px">
+  const weekNav = base === "health/food" ? `<div class="btns" style="gap:4px">
       <a class="iconbtn" href="#health/food/${shiftDay(monday, -7)}" aria-label="Previous week">${ic("back")}</a>
       <b class="small" style="min-width:110px;text-align:center">${week.length ? esc(dayShort(monday) + " " + dayName(monday).split(" ").slice(1).join(" ") + " – " + dayName(week[6].date).split(" ").slice(1).join(" ")) : "This week"}</b>
       ${nextWeek <= d.today ? `<a class="iconbtn" href="#health/food/${nextWeek}" aria-label="Next week">${ic("chev")}</a>` : `<span class="iconbtn" aria-disabled="true" style="opacity:.35">${ic("chev")}</span>`}
-    </div>`;
-
+    </div>` : `<b class="small">This week</b>`;
   const est = d.estimate && d.estimate.ok ? d.estimate.data : null;
   const side = est
-    ? `<div class="spark-card"><span class="small"><b>Expenditure</b></span><span class="xs muted">Estimate</span>
+    ? `<a class="spark-card" href="#health/progress"><span class="small"><b>Expenditure</b></span><span class="xs muted">Estimate</span>
         <span class="spark-v"><b class="num">${fmtN(est.expenditure)}</b> <span class="small muted">kcal</span></span>
-        <span class="xs muted">${est.low && est.high ? `likely ${fmtN(est.low)}–${fmtN(est.high)}` : "From your logged intake and weight"}</span></div>`
+        <span class="xs muted">${est.low && est.high ? `likely ${fmtN(est.low)}–${fmtN(est.high)}` : "From your logged intake and weight"}</span></a>
+      ${est.trend_kg != null ? `<a class="spark-card" href="#health/progress"><span class="small"><b>Weight trend</b></span><span class="xs muted">Smoothed</span>
+        <span class="spark-v"><b class="num">${Number(est.trend_kg).toFixed(1)}</b> <span class="small muted">kg</span></span>
+        <span class="xs muted">${est.weekly_change_kg != null ? `${est.weekly_change_kg > 0 ? "+" : ""}${Number(est.weekly_change_kg).toFixed(2)} kg a week` : ""}</span></a>` : ""}`
     : `<div class="spark-card"><span class="small"><b>Expenditure</b></span><span class="xs muted">${esc(d.estimate ? d.estimate.error : "Not connected")}</span></div>`;
+  return `<section class="panel a-week"><div class="panel-h"><h2>Weekly nutrition</h2>${weekNav}${base !== "health/food" ? `<div class="r"><a class="btn ghost sm" href="#health/food">Food ${ic("chev", 16)}</a></div>` : ""}</div>
+    ${week.length ? `<div class="wk2"><div class="stack s8"><div class="g-wrap"><div class="g-cols" style="--n:7">${cols}</div>
+      <div class="g-nums">${nums}<span class="g-day">${esc(dayName(cur))}</span></div></div>
+      <div class="g-key"><span>Faded: partly logged or today</span><span>Cap on top: over target</span><span>Dashed: no record</span></div>
+      <p class="xs muted">${logged} of ${week.filter((r) => r.status !== "future").length} days logged so far this week.</p></div>
+      <div class="wk2-side">${side}</div></div>` : notConnected("NutriTrace", d.week && d.week.error)}
+  </section>`;
+}
+
+async function screenFood(day) {
+  const d = await healthData("food:" + (day || "today"), "food" + (day ? `?day=${encodeURIComponent(day)}` : ""));
+  if (!d) return healthDown("food", "Food");
+  const links = d.links || {};
+  const cur = d.day && d.day.ok ? d.day.data.date : d.today;
+  const goals = d.goals && d.goals.ok ? d.goals.data : {};
 
   const dayRec = d.day && d.day.ok ? d.day.data : null;
   const t = dayRec ? dayRec.totals : null;
@@ -897,13 +957,7 @@ async function screenFood(day) {
         ${cur < d.today ? `<a class="iconbtn" href="#health/food/${shiftDay(cur, 1)}" aria-label="Next day">${ic("chev")}</a>` : ""}
       </div></div>
       ${hNotice(d.goals, "The goals")}
-      <section class="panel"><div class="panel-h"><h2>Weekly nutrition</h2>${weekNav}</div>
-        ${week.length ? `<div class="wk2"><div class="stack s8"><div class="g-wrap"><div class="g-cols" style="--n:7">${cols}</div>
-          <div class="g-nums">${nums}<span class="g-day">${esc(dayName(cur))}</span></div></div>
-          <div class="g-key"><span>Faded: partly logged or today</span><span>Cap on top: over target</span><span>Dashed: no record</span></div>
-          <p class="xs muted">${logged} of ${week.filter((r) => r.status !== "future").length} days logged so far this week.</p></div>
-          <div class="wk2-side">${side}</div></div>` : notConnected("NutriTrace", d.week && d.week.error)}
-      </section>
+      ${weekPanel(d, cur)}
       ${dayBody}
       <p class="xs muted">Weight history isn't readable by the apps' tokens yet, so it isn't shown here.</p>
     </div>`;

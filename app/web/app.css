@@ -38,3 +38,8 @@ a.iconbtn{display:inline-flex;align-items:center;justify-content:center}
 .food-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 14px; }
 .food-row .inp { min-width: 0; }
 .food-head { font-size: 12px; font-weight: 550; color: var(--fg-3); }
+
+/* Today: agenda rows are links to the Planner. */
+.agenda a.row { text-decoration: none; color: inherit; }
+a.ask-bar { text-decoration: none; }
+a.spark-card { text-decoration: none; color: inherit; }
