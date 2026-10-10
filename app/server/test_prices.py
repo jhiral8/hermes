@@ -64,7 +64,7 @@ class PriceTests(unittest.TestCase):
             out = p.check({"items": ["Lentils", "Coconut milk"]}, chat=object())
         self.assertEqual(out["found"], 1)
         self.assertEqual(out["prices"][0]["source"], "max")
-        self.assertEqual(p.compare()["items"][0]["cheapest_price"], 0.89)
+        self.assertEqual(p.compare()["items"][0]["cheapest_price"], 0.178)  # per 100 g
 
     def test_check_with_nothing_found_says_so(self):
         p = Prices(None, clock=day("2026-10-09"))
@@ -103,3 +103,29 @@ class StoreNameTests(unittest.TestCase):
         self.assertEqual(store_name("Corner shop"), "Other")
         self.assertEqual(store_name("Thermos market"), "Other")
         self.assertEqual(store_name(None), "Other")
+
+
+class UnitPriceTests(unittest.TestCase):
+    def test_cheaper_per_kg_wins_even_with_a_bigger_price_tag(self):
+        p = Prices(None, clock=day("2026-10-10"))
+        p.add({"item": "Lentils", "store": "Asda", "price": "2.00", "pack": "500 g"})
+        p.add({"item": "Lentils", "store": "Tesco", "price": "2.60", "pack": "1 kg"})
+        out = p.compare()["items"][0]
+        self.assertEqual(out["cheapest"], "Tesco")
+        self.assertEqual(out["cheapest_price"], 0.26)
+        self.assertEqual(out["basis"], "100 g")
+        self.assertTrue(out["pack_sizes_differ"])
+
+    def test_litres_compare_per_100_ml(self):
+        p = Prices(None, clock=day("2026-10-10"))
+        p.add({"item": "Milk", "store": "Aldi", "price": "1.10", "pack": "2 l"})
+        p.add({"item": "Milk", "store": "Lidl", "price": "0.60", "pack": "1 l"})
+        self.assertEqual(p.compare()["items"][0]["cheapest"], "Aldi")
+
+    def test_unreadable_packs_that_differ_are_not_ranked(self):
+        p = Prices(None, clock=day("2026-10-10"))
+        p.add({"item": "Bread", "store": "Tesco", "price": "1.10", "pack": "1 tin"})
+        p.add({"item": "Bread", "store": "Asda", "price": "0.90", "pack": "2 tins"})
+        out = p.compare()["items"][0]
+        self.assertIsNone(out["cheapest"])
+        self.assertIn("note", out)

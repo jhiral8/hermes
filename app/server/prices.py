@@ -37,6 +37,21 @@ CHECK_RULES = (
 )
 
 
+PACK = re.compile(r"\s*(\d+(?:\.\d+)?)\s*(kg|g|l|ml)\s*", re.I)
+
+
+def unit_price(price, pack):
+    """Price per 100 g or per 100 ml, from the pack text ('500 g', '1 kg', '2 l'). None if the pack size isn't readable."""
+    m = PACK.fullmatch(pack or "")
+    if not m:
+        return None
+    size, unit = float(m.group(1)), m.group(2).lower()
+    if size <= 0:
+        return None
+    grams = size * 1000 if unit in ("kg", "l") else size  # kg and l scale to 1000 g or ml
+    return ("100 ml" if unit in ("l", "ml") else "100 g", round(price / grams * 100, 3))
+
+
 def _money(v):
     if isinstance(v, bool) or v is None:
         return None
@@ -158,7 +173,8 @@ class Prices:
         return {"rows": sorted(rows, key=lambda r: r["date"], reverse=True)[:500]}
 
     def compare(self):
-        """For each item, its latest price at each shop, and the cheapest shop now."""
+        """For each item, its latest price at each shop, and the cheapest shop by price per 100 g (or 100 ml).
+        A shop whose pack size can't be read is listed, but not ranked."""
         with self._lock:
             rows = list(self._load())
         latest = {}
@@ -166,11 +182,28 @@ class Prices:
             latest[(r["item"].lower(), r["store"])] = r
         items = {}
         for (key, _store), r in latest.items():
-            items.setdefault(r["item"], {})[r["store"]] = {"price": r["price"], "pack": r["pack"], "date": r["date"]}
+            unit = unit_price(r["price"], r.get("pack"))
+            items.setdefault(r["item"], {})[r["store"]] = {
+                "price": r["price"], "pack": r["pack"], "date": r["date"],
+                "unit": unit[1] if unit else None, "basis": unit[0] if unit else None}
         out = []
         for name, shops in sorted(items.items(), key=lambda x: x[0].lower()):
-            best = min(shops.items(), key=lambda kv: kv[1]["price"])
-            out.append({"item": name, "shops": shops, "cheapest": best[0], "cheapest_price": best[1]["price"]})
+            ranked = {k: v for k, v in shops.items() if v["unit"] is not None}
+            if ranked:
+                basis = min(ranked.values(), key=lambda v: v["unit"])["basis"]
+                ranked = {k: v for k, v in ranked.items() if v["basis"] == basis}
+                best = min(ranked.items(), key=lambda kv: kv[1]["unit"])
+                out.append({"item": name, "shops": shops, "cheapest": best[0], "cheapest_price": best[1]["unit"],
+                            "basis": basis, "pack_sizes_differ": len({v["pack"] for v in shops.values()}) > 1})
+            elif len({v["pack"] for v in shops.values()}) == 1:
+                # Same pack everywhere (e.g. "each"), so the plain price is a fair comparison.
+                best = min(shops.items(), key=lambda kv: kv[1]["price"])
+                out.append({"item": name, "shops": shops, "cheapest": best[0], "cheapest_price": best[1]["price"],
+                            "basis": "pack", "pack_sizes_differ": False})
+            else:
+                out.append({"item": name, "shops": shops, "cheapest": None, "cheapest_price": None,
+                            "basis": None, "pack_sizes_differ": True,
+                            "note": "Pack sizes aren't readable, so no shop is ranked yet."})
         return {"items": out}
 
     def history(self, item):
