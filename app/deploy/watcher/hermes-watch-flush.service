@@ -1,0 +1,14 @@
+[Unit]
+Description=Send page-watcher changes queued during quiet hours
+
+# Skipped while the kill switch is on.
+ConditionPathExists=!/etc/hermes-paused
+
+[Service]
+Type=oneshot
+User=watch
+EnvironmentFile=/etc/hermes-watch/relay.env
+ExecStart=/usr/bin/python3 -I /srv/watch/relay.py flush
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hermes-watch

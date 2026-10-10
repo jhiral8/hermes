@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b211f">
+<title>Hermes</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="preload" href="/fonts/geist-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/hermes.css">
+<link rel="stylesheet" href="/vendor/uplot/uPlot.min.css">
+<link rel="stylesheet" href="/app.css">
+<script src="/icons.js" defer></script>
+<script src="/vendor/dompurify/purify.min.js" defer></script>
+<script src="/vendor/fuse/fuse.basic.min.js" defer></script>
+<script src="/vendor/sortable/Sortable.min.js" defer></script>
+<script src="/vendor/uplot/uPlot.iife.min.js" defer></script>
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div id="app" class="app">
+  <aside class="side" id="side"></aside>
+  <div class="main-col">
+    <header class="top" id="top"></header>
+    <div id="banner"></div>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <nav class="bnav" id="bnav" aria-label="Primary"></nav>
+</div>
+<div id="overlay"></div>
+<div id="toasts" aria-live="polite" role="status"></div>
+</body>
+</html>

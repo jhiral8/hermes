@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly MacroFactor history and expenditure feed
+
+[Timer]
+OnCalendar=*-*-* 04:10:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,6 @@
+{
+  "sqlite_path": "/var/lib/hermes-broker/broker.db",
+  "out": "/var/lib/hermes-app-feed/broker.json",
+  "pending_sql": "select id, coalesce(json_extract(payload, '$.subject'), 'Email send') as title, json_extract(payload, '$.to') as recipients, status, strftime('%Y-%m-%dT%H:%M:%SZ', created, 'unixepoch') as requested, strftime('%Y-%m-%dT%H:%M:%SZ', created + 600, 'unixepoch') as expires from requests where status = 'pending' order by created desc limit 50",
+  "history_sql": "select id, coalesce(json_extract(payload, '$.subject'), 'Email send') as title, json_extract(payload, '$.to') as recipients, status, strftime('%Y-%m-%dT%H:%M:%SZ', created, 'unixepoch') as requested, strftime('%Y-%m-%dT%H:%M:%SZ', updated, 'unixepoch') as decided from requests where status != 'pending' order by updated desc limit 30"
+}

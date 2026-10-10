@@ -1,0 +1,89 @@
+/* Hermes app additions on top of the mockup's design system (hermes.css). */
+
+/* Screens that arrive in later phases stay visible in the sidebar, quieter. */
+.nav a.soon { color: var(--fg-3); }
+.nav a.soon .ic { opacity: .6; }
+.soon-tag { margin-left: auto; font-size: 11.5px; color: var(--fg-3); }
+
+/* Today in Phase 2: decisions and team work side by side, server and brief below. */
+.bento.bento-p2 {
+  grid-template-areas:
+    "dec dec dec dec dec dec team team team team team team"
+    "sys sys sys sys sys sys sys brief brief brief brief brief";
+}
+.a-sys { grid-area: sys; }
+@media (max-width: 1100px) {
+  .bento.bento-p2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "dec team" "sys brief"; }
+}
+@media (max-width: 760px) {
+  .bento.bento-p2 { grid-template-columns: minmax(0, 1fr); grid-template-areas: "dec" "team" "sys" "brief"; }
+}
+
+.offline-pill i { background: var(--err) !important; }
+
+textarea.inp { resize: vertical; min-height: 88px; font: inherit; }
+
+/* Max chat: the bottom bar covers the footnote on phones. */
+@media (max-width:1023px){ .mc-hint{display:none} main .mc-app{height:calc(100dvh - 164px);min-height:360px} }
+
+/* Health: the weekly grid's days are links (the mockup uses buttons). */
+a.g-col{text-decoration:none}
+a.iconbtn{display:inline-flex;align-items:center;justify-content:center}
+
+/* Barcode scan and saved foods */
+.scan-box { position: relative; background: #000; border-radius: var(--r-md, 12px); overflow: hidden; aspect-ratio: 4 / 3; }
+.scan-box video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-aim { position: absolute; inset: 22% 12%; border: 2px solid rgba(255, 255, 255, .85); border-radius: 10px; box-shadow: 0 0 0 999px rgba(0, 0, 0, .25); pointer-events: none; }
+.food-grid { display: grid; gap: 6px; }
+.food-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 14px; }
+.food-row .inp { min-width: 0; }
+.food-head { font-size: 12px; font-weight: 550; color: var(--fg-3); }
+
+/* Today: agenda rows are links to the Planner. */
+.agenda a.row { text-decoration: none; color: inherit; }
+a.ask-bar { text-decoration: none; }
+a.spark-card { text-decoration: none; color: inherit; }
+.tg-ev.short{display:flex;gap:6px;align-items:baseline;padding-top:2px}
+.tg-ev.short b{flex:0 1 auto;min-width:2em}
+.tg-ev.short > span{flex:0 100 auto;min-width:0}
+.lib-file{padding:0;overflow:hidden}
+.lib-file .art-frame{width:100%;height:70vh;border:0;display:block}
+.lib-file .art-doc,.lib-file .art-code,.lib-file .art-svg{padding:20px;margin:0}
+.panel.skill p.small{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.panel hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}
+.search-btn span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.search-btn kbd{white-space:nowrap;flex:none}
+.uchart{min-height:250px;width:100%}
+.uchart .u-legend{font-size:12px;color:var(--fg-2);text-align:left;margin-top:4px}
+.uchart .u-legend .u-marker{border-radius:3px}
+.uchart .u-legend tr:first-child th{display:none}
+/* Strategy: the week's targets stay a compact table on phones */
+.st-wk td, .st-wk th { white-space: nowrap; }
+.st-wk .st-tr { color: var(--fg-3); vertical-align: -2px; }
+@media (max-width: 560px) { .st-wk td, .st-wk th { padding-left: 6px; padding-right: 6px; font-size: 13px; } }
+/* Meal plan: a week grid on wide screens, a list of days on phones */
+.mp-cell { display: flex; flex-direction: column; gap: 6px; }
+.slot .st { display: block; color: var(--fg-3); font-size: 12px; margin-top: 2px; }
+.slot.skipped { opacity: .55; text-decoration: line-through; }
+.slot.ct { cursor: default; background: var(--fill); }
+.slot.empty { min-height: 34px; }
+.mp-list { display: none; }
+@media (max-width: 900px) { .mp-grid { display: none; } .mp-list { display: flex; } }
+
+/* Log food: ways to log */
+.tabs.sub button{min-height:32px;padding:0 12px;border:0;border-radius:8px;margin:0;background:transparent}
+.tabs.sub button:hover{background:var(--fill)}
+.tabs.sub button[aria-pressed="true"]{background:var(--fill-2);color:var(--fg)}
+
+/* Live workout */
+.ses-sets{display:grid;gap:6px}
+.ses-row{display:grid;grid-template-columns:32px 1fr 1fr auto;gap:8px;align-items:center}
+.ses-row.ses-head{font-size:12px;color:var(--fg-2)}
+.ses-row .inp{text-align:center;min-height:42px}
+.ses-row.done .inp{background:var(--fill)}
+.btn.ok{color:var(--ok,#067647)}
+.btn.warn{color:var(--warn,#b54708)}
+.rest-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:40;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  width:min(720px,calc(100% - 32px));padding:10px 14px;border-radius:14px;background:var(--surface,#fff);border:1px solid var(--line);box-shadow:0 8px 30px rgba(0,0,0,.15)}
+.rest-bar b{font-size:22px}
+@media (max-width:1023px){.rest-bar{bottom:88px}}
