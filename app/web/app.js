@@ -3036,6 +3036,8 @@ async function screenPantry() {
   let d;
   try { d = await api("/api/health/pantry"); }
   catch (e) { return healthHead("meals", "Meals & Shop") + mealsSub("meals/pantry") + notConnected("Health", e.message); }
+  const pr = await api("/api/health/prices/compare").catch(() => ({ items: [] }));
+  S.priceView = pr;
   S.pantryView = d;
   const opts = (list, cur) => list.map((x) => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
   const unitSel = (id, cur = "each") => `<select class="inp" id="${id}" style="width:auto" aria-label="Unit">${opts(d.units, cur)}</select>`;
@@ -3064,6 +3066,10 @@ async function screenPantry() {
       <button type="button" class="btn ghost sm" data-act="shopRemove" data-arg="${s.id}">Remove</button></span></div>`).join("")
     : `<p class="muted">The list is empty.</p>`;
   const hasDone = d.shop.some((s) => s.done);
+  const priceRows = pr.items.length ? pr.items.map((x) => `<div class="li"><span class="main"><span class="t">${esc(x.item)}</span>
+      <span class="s">Cheapest: ${esc(x.cheapest)} · £${esc(x.cheapest_price.toFixed(2))}${Object.keys(x.shops).length > 1 ? " · also " + Object.keys(x.shops).filter((k) => k !== x.cheapest).map((k) => `${esc(k)} £${esc(x.shops[k].price.toFixed(2))}`).join(", ") : ""}</span></span></div>`).join("")
+    : `<p class="muted">No prices yet. Type one in, or ask Max to check the shop sites.</p>`;
+  const priceItems = [...new Set([...d.shop.filter((s) => !s.done).map((s) => s.name), ...d.items.map((x) => x.name)])];
 
   return healthHead("meals", "Meals & Shop", "", "Your pantry, cooked batches and shopping list. Kept by the app only.") + mealsSub("meals/pantry") + `
     <section class="panel"><div class="panel-h"><div><h2>Pantry</h2><p class="small muted">${d.items.length} item${d.items.length === 1 ? "" : "s"}</p></div></div>
@@ -3095,6 +3101,18 @@ async function screenPantry() {
         <input class="inp num" inputmode="decimal" id="sa-qty" placeholder="Amount" aria-label="Amount" style="width:100px">
         ${unitSel("sa-unit")}
         <button type="button" class="btn primary" data-act="shopAdd">Add</button>
+      </div></section>
+
+    <section class="panel"><div class="panel-h"><div><h2>Shop prices</h2><p class="small muted">Cheapest shop for each item, from prices you typed and prices Max found</p></div></div>
+      <div class="list">${priceRows}</div>
+      <div class="btns" style="margin-top:12px">
+        <button type="button" class="btn ghost" data-act="priceCheck" data-arg="${esc(priceItems.slice(0, 12).join("|"))}" ${priceItems.length ? "" : "disabled"}>Ask Max to check ${priceItems.length ? Math.min(priceItems.length, 12) : ""} item${priceItems.length === 1 ? "" : "s"}</button>
+      </div>
+      <div class="btns" style="margin-top:12px">
+        <input class="inp" id="pp-item" placeholder="Item" aria-label="Item">
+        <select class="inp" id="pp-store" style="width:auto" aria-label="Shop">${["Tesco", "Sainsbury's", "Asda", "Morrisons", "Waitrose", "Ocado", "Aldi", "Lidl", "Iceland", "Co-op", "M&S", "Trolley", "Other"].map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join("")}</select>
+        <input class="inp num" inputmode="decimal" id="pp-price" placeholder="£" aria-label="Price in pounds" style="width:100px">
+        <button type="button" class="btn primary" data-act="priceAdd">Add price</button>
       </div></section>`;
 }
 
@@ -3161,6 +3179,29 @@ Object.assign(STRAT_ACTS, {
       modal("Pantry check", body, `<button type="button" class="btn ghost" data-act="close">Close</button>`);
     } catch (e) {
       modal("Pantry check", notConnected("CookTrace", e.message), `<button type="button" class="btn ghost" data-act="close">Close</button>`);
+    }
+  },
+});
+
+/* Shop prices: typed in, or checked by Max on the approved shop sites (Trolley first). */
+Object.assign(STRAT_ACTS, {
+  priceAdd: async () => {
+    const item = pantryVal("pp-item").trim();
+    if (!item) return toast("Name the item first.");
+    await api("/api/health/prices/add", { body: { item, store: pantryVal("pp-store"), price: pantryVal("pp-price") } });
+    toast("Price added."); render();
+  },
+  priceCheck: async (arg) => {
+    const items = String(arg || "").split("|").filter(Boolean);
+    if (!items.length) return toast("Nothing to check yet.");
+    modal("Checking prices", `<p class="small muted">Max is checking the shop sites for ${items.length} item${items.length === 1 ? "" : "s"}. This can take a minute.</p>`, `<button type="button" class="btn ghost" data-act="close">Close</button>`);
+    try {
+      const r = await api("/api/health/prices/check", { body: { items } });
+      closeModal();
+      toast(`Found ${r.found} price${r.found === 1 ? "" : "s"}.`);
+      render();
+    } catch (e) {
+      modal("Checking prices", notConnected("Max", e.message), `<button type="button" class="btn ghost" data-act="close">Close</button>`);
     }
   },
 });

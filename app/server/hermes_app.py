@@ -40,6 +40,7 @@ from health_log import HealthLog
 from strategy import Strategy
 from mealplan import MealPlan, ask_max
 from pantry import Pantry
+from prices import Prices
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
@@ -350,7 +351,18 @@ def make_pantry(cfg, app):
     return Pantry(path)
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None, pantry=None):
+def make_prices(cfg, app):
+    """Shop prices (in memory in sample-data mode)."""
+    if app.demo:
+        return Prices(None)
+    path = (cfg.get("health") or {}).get("prices_file")
+    if not path:
+        near = (cfg.get("foods") or {}).get("store_path") or cfg.get("audit_log")
+        path = str(Path(near).with_name("prices.json")) if near else None
+    return Prices(path)
+
+
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None, pantry=None, prices=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -377,6 +389,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         mealplan = make_mealplan(cfg, app, health, hlog, strategy)
     if pantry is None:
         pantry = make_pantry(cfg, app)
+    if prices is None:
+        prices = make_prices(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -512,6 +526,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     result = self._health_log(user, parts[3], body)
                 elif parts[:3] == ["api", "health", "pantry"] and len(parts) == 4:
                     result = self._pantry_post(user, parts[3], body)
+                elif parts[:3] == ["api", "health", "prices"] and len(parts) == 4:
+                    result = self._prices_post(user, parts[3], body)
                 else:
                     result = self._dispatch(user, parts, body)
             except (ActionError, ChatError) as e:
@@ -648,6 +664,15 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                         return
                 elif what == "pantry":
                     out = pantry.view()
+                elif what == "prices":
+                    out = prices.view((q.get("item") or [None])[0])
+                elif what == "prices/compare":
+                    out = prices.compare()
+                elif what == "prices/history":
+                    item = (q.get("item") or [""])[0]
+                    if not item.strip():
+                        raise ValueError("Pick an item first.")
+                    out = prices.history(item)
                 elif what == "pantry-check":
                     rid = (q.get("recipe") or [""])[0]
                     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid):
@@ -767,6 +792,22 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             out = self._strategy_do(lambda: fn(body))
             detail = {"choice": body.get("action")} if kind == "checkin" else {}
             app.audit(user, "health_" + kind, detail)
+            return {"ok": True, **out, **app.meta()}
+
+        def _prices_post(self, user, kind, body):
+            """Shop prices: typed in by Craig, or checked by Max on the approved shop sites."""
+            if kind not in ("add", "check"):
+                return None
+            try:
+                out = prices.add(body) if kind == "add" else prices.check(body, chat)
+            except ChatError as e:
+                raise ActionError(e.code, str(e))
+            except ValueError as e:
+                raise ActionError(400, str(e))
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            # The item names go to Max for a check, so the audit line says only that it happened.
+            app.audit(user, "health_prices_" + kind, {})
             return {"ok": True, **out, **app.meta()}
 
         def _pantry_post(self, user, kind, body):
