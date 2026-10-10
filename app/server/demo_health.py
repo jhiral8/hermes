@@ -99,13 +99,13 @@ def _ex_id(key):
     return next(x["id"] for x in _exercises() if x["key"] == key)
 
 
-# CookTrace keeps nutrition for the whole recipe, not per serving.
+# CookTrace keeps nutrition per serving, as the real recipes are stored.
 RECIPES = [
-    {"id": 1, "name": "Chicken tikka traybake", "servings": 4, "nutrition": {"calories": 2080, "proteins": 180, "carbohydrates": 152, "fat": 72, "fiber": 24}},
-    {"id": 2, "name": "Salmon, greens and potatoes", "servings": 2, "nutrition": {"calories": 1220, "proteins": 80, "carbohydrates": 90, "fat": 52, "fiber": 14}},
-    {"id": 3, "name": "Beef chilli", "servings": 6, "nutrition": {"calories": 2880, "proteins": 228, "carbohydrates": 240, "fat": 96, "fiber": 60}},
+    {"id": 1, "name": "Chicken tikka traybake", "servings": 4, "nutrition": {"calories": 520, "proteins": 45, "carbohydrates": 38, "fat": 18, "fiber": 6}},
+    {"id": 2, "name": "Salmon, greens and potatoes", "servings": 2, "nutrition": {"calories": 610, "proteins": 40, "carbohydrates": 45, "fat": 26, "fiber": 7}},
+    {"id": 3, "name": "Beef chilli", "servings": 6, "nutrition": {"calories": 480, "proteins": 38, "carbohydrates": 40, "fat": 16, "fiber": 10}},
     {"id": 4, "name": "Overnight oats", "servings": 1, "nutrition": {"calories": 390, "proteins": 28, "carbohydrates": 48, "fat": 9, "fiber": 8}},
-    {"id": 5, "name": "Chicken and rice bowl", "servings": 2, "nutrition": {"calories": 1300, "proteins": 92, "carbohydrates": 134, "fat": 44, "fiber": 8}},
+    {"id": 5, "name": "Chicken and rice bowl", "servings": 2, "nutrition": {"calories": 650, "proteins": 46, "carbohydrates": 67, "fat": 22, "fiber": 4}},
     {"id": 6, "name": "Tuna sandwich", "servings": 1, "nutrition": {}}]
 
 

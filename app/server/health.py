@@ -63,16 +63,8 @@ def _times(nut, q):
 
 
 def per_serving(recipe):
-    """CookTrace stores a recipe's nutrition for the whole recipe; split it by servings."""
-    servings = recipe.get("servings")
-    try:
-        servings = float(servings)
-    except (TypeError, ValueError):
-        servings = 1.0
-    if not servings > 0:
-        servings = 1.0
-    total = nutrients(recipe.get("nutrition") or {})
-    return {k: (round(v / servings, 1) if v is not None else None) for k, v in total.items()}
+    """CookTrace stores a recipe's nutrition per serving (checked against the imported recipes), so it's read as it is."""
+    return nutrients(recipe.get("nutrition") or {})
 
 
 class NotFound(SourceError):

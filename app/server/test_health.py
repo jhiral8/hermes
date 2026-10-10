@@ -191,3 +191,13 @@ class Http(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerServingTests(unittest.TestCase):
+    def test_stored_nutrition_is_already_per_serving(self):
+        # Imported CookTrace values: overnight oats 349 kcal / 17 g protein for 4 servings, protein bars 205 kcal / 10 g for 8.
+        from health import per_serving
+        oats = per_serving({"servings": 4, "nutrition": {"calories": 349, "proteins": 17}})
+        bars = per_serving({"servings": 8, "nutrition": {"calories": 205, "proteins": 10}})
+        self.assertEqual((oats["kcal"], oats["protein"]), (349, 17))
+        self.assertEqual((bars["kcal"], bars["protein"]), (205, 10))
