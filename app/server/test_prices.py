@@ -89,3 +89,17 @@ class PriceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoreNameTests(unittest.TestCase):
+    def test_loose_shop_names_map_to_the_app_list(self):
+        from prices import store_name
+        self.assertEqual(store_name("ASDA Groceries"), "Asda")
+        self.assertEqual(store_name("Sainsbury's"), "Sainsbury's")
+        self.assertEqual(store_name("Sainsburys"), "Sainsbury's")
+        self.assertEqual(store_name("M&S"), "M&S")
+        self.assertEqual(store_name("Marks & Spencer"), "M&S")
+        self.assertEqual(store_name("Co-op Food"), "Co-op")
+        self.assertEqual(store_name("Corner shop"), "Other")
+        self.assertEqual(store_name("Thermos market"), "Other")
+        self.assertEqual(store_name(None), "Other")

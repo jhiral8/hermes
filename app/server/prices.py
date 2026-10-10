@@ -10,6 +10,7 @@ orders anything.
 
 import datetime
 import json
+import re
 import secrets
 import threading
 from pathlib import Path
@@ -21,6 +22,11 @@ MAX_ROWS = 5000
 STORES = ("Trolley", "Tesco", "Sainsbury's", "Asda", "Morrisons", "Waitrose", "Ocado", "Aldi", "Lidl",
           "Iceland", "Co-op", "M&S", "Other")
 SOURCES = ("typed", "max")
+# Shop names as Max or Craig might write them; matched loosely (case and punctuation ignored).
+STORE_ALIASES = {"Trolley": ("trolley",), "Tesco": ("tesco",), "Sainsbury's": ("sainsburys", "sainsbury"),
+                 "Asda": ("asda",), "Morrisons": ("morrisons", "morrison"), "Waitrose": ("waitrose",),
+                 "Ocado": ("ocado",), "Aldi": ("aldi",), "Lidl": ("lidl",), "Iceland": ("iceland",),
+                 "Co-op": ("coop", "cooperative"), "M&S": ("marksandspencer", "marksspencer", "ms")}
 CHECK_RULES = (
     "Check the current shelf price of each item below on the UK supermarket sites, Trolley first. "
     "Answer with one JSON object and nothing else, shaped like "
@@ -41,6 +47,17 @@ def _money(v):
     return round(n, 2) if 0 <= n <= 500 else None
 
 
+def store_name(raw):
+    """The shop's name as the app lists it, or 'Other' if it isn't one of them."""
+    key = re.sub(r"[^a-z]", "", str(raw or "").lower())
+    if not key:
+        return "Other"
+    for name, aliases in STORE_ALIASES.items():
+        if any(a == key or (len(a) > 3 and a in key) for a in aliases):
+            return name
+    return "Other"
+
+
 def clean_prices(obj, wanted):
     """Keep only well-formed price rows for items that were asked about."""
     names = {w.lower(): w for w in wanted}
@@ -52,8 +69,7 @@ def clean_prices(obj, wanted):
         price = _money(row.get("price"))
         if not item or price is None:
             continue
-        store = str(row.get("store") or "Other").strip()
-        out.append({"item": item, "store": store if store in STORES else "Other", "price": price,
+        out.append({"item": item, "store": store_name(row.get("store")), "price": price,
                     "pack": str(row.get("pack") or "").strip()[:40] or None,
                     "url": str(row.get("url") or "").strip()[:300] or None})
     return out
