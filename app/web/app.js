@@ -840,6 +840,8 @@ async function screenMax(cid) {
     try { conv = await api(`/api/chat/${encodeURIComponent(cid)}`); } catch (e) { toast(e.message); }
   }
   S.chat = conv;
+  S.scopeOpts = list.scope_options || [];
+  S.scopeDefault = list.scope_default || [];
   try { S.artList = (await api("/api/artifacts")).artifacts; S.artErr = null; } catch (e) { S.artList = null; S.artErr = e.message; }
   if (S.art && S.art.name !== "*" && (!S.art.data || S.art.stale)) {
     try { S.art.data = await api(`/api/artifacts/${encodeURIComponent(S.art.name)}`); S.art.stale = false; } catch (e) { S.art.error = e.message; }
@@ -851,7 +853,7 @@ async function screenMax(cid) {
   return `<div class="mc-app${cid || fresh ? " has-conv" : ""}${S.art ? " art-open" : ""}"><aside class="mc-side"><div class="mc-side-h"><span class="mc-av max">${logoMark(30)}</span><span style="flex:1;min-width:0"><b>Max</b><span class="xs muted" style="display:block">Same Max as Signal · same approvals</span></span><button type="button" class="btn ghost" data-act="newChat" aria-label="New chat" title="New chat">${ic("plus")}</button></div>
     <nav class="mc-convs" aria-label="Chats">${convs}</nav></aside>
     <section class="mc-main" aria-label="Chat">
-      <header class="mc-bar"><a class="iconbtn mc-back" href="#max" aria-label="All chats">${ic("back")}</a><b class="mc-title">${esc((conv && conv.title) || "New chat")}</b><span class="spacer"></span><button type="button" class="btn ghost sm" data-act="artOpen" data-arg="*" title="Files Max has made">${ic("file", 15)}<span class="lbl">Files</span></button>${conv ? `<button type="button" class="btn ghost sm" data-act="chatDelete" data-arg="${esc(conv.id)}" title="Delete this chat"${running ? " disabled" : ""}>${ic("trash", 15)}<span class="lbl">Delete</span></button>` : ""}</header>
+      <header class="mc-bar"><a class="iconbtn mc-back" href="#max" aria-label="All chats">${ic("back")}</a><b class="mc-title">${esc((conv && conv.title) || "New chat")}</b><span class="spacer"></span><button type="button" class="btn ghost sm" data-act="scopeOpen" title="What Max can use in this chat">${ic("file", 15)}<span class="lbl">Sources</span></button><button type="button" class="btn ghost sm" data-act="artOpen" data-arg="*" title="Files Max has made">${ic("file", 15)}<span class="lbl">Files</span></button>${conv ? `<button type="button" class="btn ghost sm" data-act="chatDelete" data-arg="${esc(conv.id)}" title="Delete this chat"${running ? " disabled" : ""}>${ic("trash", 15)}<span class="lbl">Delete</span></button>` : ""}</header>
       <div class="mc-scroll" id="mc-scroll"><div class="mc-col" id="transcript" aria-live="polite">${conv && conv.messages.length ? msgs : `<div class="mc-empty">${logoMark(40)}<h2>How can Max help?</h2><p class="small muted">This is the same Max as on Signal, with the same sandbox and approvals. Emails still need your fingerprint.</p></div>`}</div></div>
       <div class="mc-dock"><div class="mc-col"><div class="composer mc-composer lh">
         <label class="sr" for="max-in">Message Max</label>
@@ -898,7 +900,7 @@ async function chatSend() {
   const res = await fetch(`/api/chat/${encodeURIComponent(cid)}/send`, {
     method: "POST", credentials: "same-origin", cache: "no-store",
     headers: { "Content-Type": "application/json", "X-Hermes-Action": "1" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, sources: S.chatScope || undefined }),
   }).catch(() => null);
   if (!res || !res.ok || !(res.headers.get("Content-Type") || "").startsWith("text/event-stream")) {
     let msg = "Max isn't reachable right now.";
@@ -3229,5 +3231,27 @@ Object.assign(STRAT_ACTS, {
   },
   blockRemove: async (id) => {
     await api("/api/planner/blocks/remove", { body: { id } }); render();
+  },
+});
+
+/* What Max may use in a chat. The switches go with every message as a rule for Max; locked sources can't be switched on. */
+const scopeNow = () => (S.chat && S.chat.scope) || S.chatScope || S.scopeDefault || [];
+Object.assign(STRAT_ACTS, {
+  scopeOpen: () => {
+    const on = scopeNow();
+    const rows = (S.scopeOpts || []).map((o) => `<label class="scope-row${o.locked ? " locked" : ""}"><input type="checkbox" id="sc-${o.key}"${on.includes(o.key) && !o.locked ? " checked" : ""}${o.locked ? " disabled" : ""}><span><b>${esc(o.label)}</b>${o.locked ? `<span class="xs muted" style="display:block">${esc(o.locked)}</span>` : ""}</span></label>`).join("");
+    modal("What Max can use", `<p class="small muted">Max is told these switches with every message in this chat. They're a rule for Max, not a lock on the server.</p><div class="scope-list">${rows}</div>`,
+      `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="scopeSave">Save</button>`);
+  },
+  scopeSave: async () => {
+    const sources = (S.scopeOpts || []).filter((o) => !o.locked && $(`#sc-${o.key}`)?.checked).map((o) => o.key);
+    const cid = (location.hash.match(/^#max\/([A-Za-z0-9_-]+)/) || [])[1];
+    if (!cid || cid === "new") S.chatScope = sources;
+    else {
+      await api(`/api/chat/${encodeURIComponent(cid)}/scope`, { body: { sources } });
+      S.chatScope = null;
+      if (S.chat) S.chat.scope = sources;
+    }
+    closeModal(); toast("Saved."); render();
   },
 });

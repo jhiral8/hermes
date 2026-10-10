@@ -75,12 +75,49 @@ class Chat(unittest.TestCase):
         req = op.reqs[0]
         self.assertEqual(req.get_header("Authorization"), "Bearer sk-test")
         sent = json.loads(req.data)
-        self.assertEqual((sent["input"], sent["conversation"], sent["stream"]), ("hi Max", "hermes-app-" + conv["id"], True))
+        self.assertTrue(sent["input"].startswith("[Sources for this message: you may use only "))
+        self.assertTrue(sent["input"].endswith("\n\nhi Max"))
+        self.assertEqual((sent["conversation"], sent["stream"]), ("hermes-app-" + conv["id"], True))
         saved = c.get(conv["id"])
         self.assertEqual(saved["title"], "hi Max")
         self.assertEqual([m["role"] for m in saved["messages"]], ["me", "max"])
         self.assertFalse(saved["busy"])
         self.assertTrue(up.closed_by_app)
+
+    def test_switches_default_then_follow_the_chat(self):
+        c, op = self.make()
+        conv = c.new()
+        self.assertEqual(c.get(conv["id"])["scope"], ["web", "task", "files", "notes", "memory"])
+        conv2, up = c.begin(USER, conv["id"], "hi", ["health", "web"])
+        sent = json.loads(op.reqs[-1].data)["input"]
+        self.assertIn("you may use only public web, health.", sent)
+        self.assertIn("Don't use this task, selected files, notes, personal notes, mail, calendar, memory", sent)
+        c.run(conv2, up, lambda ev: None)
+        self.assertEqual(c.get(conv["id"])["scope"], ["web", "health"])
+        # Later messages with no switches sent keep the saved ones.
+        c.begin(USER, conv["id"], "again")
+        self.assertIn("you may use only public web, health.", json.loads(op.reqs[-1].data)["input"])
+
+    def test_set_scope_saves_without_a_message(self):
+        c, _ = self.make()
+        conv = c.new()
+        self.assertEqual(c.set_scope(USER, conv["id"], ["health"]), {"scope": ["health"]})
+        self.assertEqual(c.get(conv["id"])["scope"], ["health"])
+        self.assertEqual(c.get(conv["id"])["messages"], [])
+
+    def test_locked_and_unknown_sources_are_refused(self):
+        c, _ = self.make()
+        conv = c.new()
+        with self.assertRaises(ChatError) as locked:
+            c.set_scope(USER, conv["id"], ["mail"])
+        self.assertEqual(locked.exception.code, 409)
+        self.assertIn("Mail stays locked", str(locked.exception))
+        with self.assertRaises(ChatError) as unknown:
+            c.begin(USER, conv["id"], "hi", ["email"])
+        self.assertEqual(unknown.exception.code, 400)
+        self.assertEqual(c.get(conv["id"])["messages"], [])
+        self.assertEqual(c.get(conv["id"])["scope_options"][6], {"key": "mail", "label": "mail",
+                                                                  "locked": "Mail stays locked until the task rules for it are done."})
 
     def test_browser_leaving_does_not_lose_the_answer(self):
         c, _ = self.make()

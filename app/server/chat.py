@@ -27,6 +27,25 @@ MAX_INPUT = 8000
 MAX_MESSAGES = 400  # per chat; older ones drop off the stored transcript
 MAX_CHATS = 200
 
+# What Max may use in a chat. Each switch is sent to Max with every message, so it
+# is a rule he is told, not a block on the server side. Mail and calendar stay
+# locked until the task rules for them are done.
+SCOPE = (
+    ("web", "public web"),
+    ("task", "this task"),
+    ("files", "selected files"),
+    ("notes", "notes"),
+    ("personal_notes", "personal notes"),
+    ("health", "health"),
+    ("mail", "mail"),
+    ("calendar", "calendar"),
+    ("memory", "memory"),
+)
+SCOPE_KEYS = tuple(k for k, _ in SCOPE)
+SCOPE_LOCKED = {"mail": "Mail stays locked until the task rules for it are done.",
+                "calendar": "Calendar stays locked until the task rules for it are done."}
+SCOPE_DEFAULT = ("web", "task", "files", "notes", "memory")
+
 
 class ChatError(Exception):
     def __init__(self, code, message):
@@ -37,6 +56,36 @@ class ChatError(Exception):
 def _now_iso():
     t = time.time()
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int(t * 1000) % 1000:03d}Z"
+
+
+def clean_scope(sources):
+    """The switched-on sources, in SCOPE order. Locked sources can't be switched on."""
+    if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
+        raise ChatError(400, "Pick the sources from the list.")
+    if set(sources) - set(SCOPE_KEYS):
+        raise ChatError(400, "Max has no source by that name.")
+    locked = [s for s in sources if s in SCOPE_LOCKED]
+    if locked:
+        raise ChatError(409, SCOPE_LOCKED[locked[0]])
+    return [k for k in SCOPE_KEYS if k in sources]
+
+
+def scope_options():
+    """Every source with its label, and why it is locked if it is."""
+    return [{"key": k, "label": lbl, "locked": SCOPE_LOCKED.get(k)} for k, lbl in SCOPE]
+
+
+def scope_line(on):
+    """The rule sent to Max ahead of each message, saying what he may use this time."""
+    labels = dict(SCOPE)
+    off = [labels[k] for k in SCOPE_KEYS if k not in on]
+    if on:
+        text = "[Sources for this message: you may use only " + ", ".join(labels[k] for k in on) + "."
+    else:
+        text = "[Sources for this message: none."
+    if off:
+        text += " Don't use " + ", ".join(off) + "; if you need one of them, say so and don't guess."
+    return text + "]"
 
 
 class ChatStore:
@@ -246,12 +295,35 @@ class MaxChat:
             raise ChatError(423, "Agents are stopped (kill switch on). Resume from your Mac first.")
 
     def list(self):
-        return {"chats": self.store.list(), "busy": sorted(self._busy)}
+        return {"chats": self.store.list(), "busy": sorted(self._busy),
+                "scope_default": list(SCOPE_DEFAULT),
+                "scope_options": scope_options()}
+
+    @staticmethod
+    def scope_of(conv):
+        """The sources this chat may use, from its saved switches (the defaults until it's been set)."""
+        saved = conv.get("scope")
+        if not isinstance(saved, list):
+            return list(SCOPE_DEFAULT)
+        return [k for k in SCOPE_KEYS if k in saved and k not in SCOPE_LOCKED]
 
     def get(self, cid):
         c = self.store.get(cid)
         c["busy"] = cid in self._busy
+        c["scope"] = self.scope_of(c)
+        c["scope_options"] = scope_options()
         return c
+
+    def set_scope(self, user, cid, sources):
+        on = clean_scope(sources)
+        with self._lock:
+            if cid in self._busy:
+                raise ChatError(409, "Max is still answering in this chat.")
+        conv = self.store.get(cid)
+        conv["scope"] = on
+        self.store.save(conv)
+        self.audit(user, "chat_scope", {"chat": cid, "on": len(on)})
+        return {"scope": on}
 
     def new(self):
         return self.store.new()
@@ -270,8 +342,12 @@ class MaxChat:
             self.audit(user, "chat_stop", {"chat": cid})
         return {"ok": True, "stopping": bool(ev)}
 
-    def begin(self, user, cid, text):
+    def begin(self, user, cid, text, sources=None):
         """Validate and record the user's message; returns the open turn.
+
+        `sources`, when sent, becomes this chat's switches from now on. Max is
+        told the switches ahead of the message; the transcript keeps only what
+        the user typed.
 
         Errors here are raised before any streaming starts, so the browser
         gets a normal JSON error.
@@ -281,6 +357,7 @@ class MaxChat:
             raise ChatError(400, "Type a message first.")
         if len(text) > MAX_INPUT:
             raise ChatError(400, f"Messages can be up to {MAX_INPUT} characters.")
+        on = clean_scope(sources) if sources is not None else None
         self._check_kill()
         conv = self.store.get(cid)
         with self._lock:
@@ -290,10 +367,12 @@ class MaxChat:
             self._stops[cid] = threading.Event()
         try:
             conv["messages"].append({"role": "me", "text": text, "at": _now_iso()})
+            if on is not None:
+                conv["scope"] = on
             if not conv.get("title"):
                 conv["title"] = text.splitlines()[0][:60]
             self.store.save(conv)
-            upstream = self.backend.open(cid, text)
+            upstream = self.backend.open(cid, scope_line(self.scope_of(conv)) + "\n\n" + text)
         except BaseException:
             self._finish(cid)
             raise

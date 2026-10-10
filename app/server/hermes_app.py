@@ -927,9 +927,11 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
             if len(p) == 2 and p[1] == "delete":
                 return c.delete(user, p[0])
             if len(p) == 2 and p[1] == "send":
-                conv, upstream = c.begin(user, p[0], body.get("text"))
+                conv, upstream = c.begin(user, p[0], body.get("text"), body.get("sources"))
                 self._stream(lambda emit: c.run(conv, upstream, emit))
                 return STREAMED
+            if len(p) == 2 and p[1] == "scope":
+                return c.set_scope(user, p[0], body.get("sources"))
             return None
 
         def _stream(self, run):

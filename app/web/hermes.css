@@ -1121,3 +1121,9 @@ main:has(.mc-app){padding:0;max-width:none}
   .li.pl .r{width:100%;justify-content:flex-start}
   .li.pl .inp.num{width:110px !important}
 }
+
+/* Max's Sources switches (chat) */
+.scope-list{display:grid;gap:8px}
+.scope-row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);cursor:pointer}
+.scope-row input{margin-top:3px}
+.scope-row.locked{opacity:.6;cursor:not-allowed}
