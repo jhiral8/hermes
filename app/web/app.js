@@ -2913,6 +2913,13 @@ async function screenPlanner(rest) {
     <a class="iconbtn" href="#planner/${week + 1}" aria-label="Next week">${ic("chev")}</a></div>
     <span class="small muted">Europe/London</span><div class="spacer"></div>${week ? `<a class="btn ghost sm" href="#planner">Today</a>` : ""}</div>`;
   if (!d.ok) return head + `<div class="stack s24">${nav}${notConnected("Google Calendar", d.error)}</div>`;
+  // The Planner's own blocks sit beside the calendar events (which stay read-only).
+  const bl = await inboxApi(`/api/planner/blocks?start=${monday}&days=7`).catch(() => ({ blocks: [] }));
+  S.plannerBlocks = bl.blocks || [];
+  for (const b of S.plannerBlocks) {
+    const day = d.days.find((x) => x.date === b.date);
+    if (day) day.events.push({ id: b.id, title: b.title, all_day: false, start: `${b.date}T${b.start}:00`, end: `${b.date}T${b.end}:00`, location: "", calendar: "Your block", block: true });
+  }
   S.planEvents = {};
   d.days.forEach((day) => day.events.forEach((e, i) => { e.key = `${day.date}-${i}`; S.planEvents[e.key] = e; }));
   const sel = d.days.find((x) => x.date === daySel) || d.days.find((x) => x.date === today) || d.days[0];
@@ -2920,10 +2927,16 @@ async function screenPlanner(rest) {
   const dayList = sel.events.length ? `<div class="stack s8">${sel.events.map(planEvent).join("")}</div>`
     : `<div class="empty"><h3>Nothing on</h3><p>Nothing is in your calendar for ${esc(dayName(sel.date))}.</p></div>`;
   const clash = overlaps(daySel ? [sel] : d.days).map(([day, a, b]) => `<div class="notice warn">${ic("alert", 16)}<div><b>Overlap on ${esc(dayName(day))}:</b> ${esc(a.title)} (${esc(evTime(a))}) and ${esc(b.title)} (${esc(evTime(b))}).</div></div>`).join("");
-  const legend = `<div class="legend"><span><span class="mk external"></span>Calendar</span></div>`;
+  const legend = `<div class="legend"><span><span class="mk external"></span>Calendar</span><span><span class="mk"></span>Your blocks</span></div>`;
+  const mine = S.plannerBlocks.filter((b) => b.date === sel.date);
+  const blockPanel = `<section class="panel" style="margin-top:12px"><div class="panel-h"><div><h2>Your blocks</h2><p class="small muted">Time you set aside, shown with your calendar. Calendar events stay as they are.</p></div></div>
+    <div class="list">${mine.length ? mine.map((b) => `<div class="li"><span class="main"><span class="t">${esc(b.title)}</span><span class="s">${esc(b.start)} to ${esc(b.end)}</span></span><span class="r"><button type="button" class="btn ghost sm" data-act="blockRemove" data-arg="${esc(b.id)}">Remove</button></span></div>`).join("") : `<p class="muted">Nothing set aside on ${esc(dayName(sel.date))}.</p>`}</div>
+    <div class="btns" style="margin-top:12px"><input class="inp" id="bk-title" placeholder="What, e.g. Gym" aria-label="Block name">
+      <input class="inp" type="time" id="bk-start" value="09:00" aria-label="Starts"><input class="inp" type="time" id="bk-end" value="10:00" aria-label="Ends">
+      <button type="button" class="btn primary" data-act="blockAdd" data-arg="${esc(sel.date)}">Add block</button></div></section>`;
   return head + `<div class="stack s24">${nav}${clash}${legend}
     <div class="desk-only">${daySel ? `${chips}<div class="cols" style="margin-top:12px">${timeGrid([sel], today, week)}${dayList}</div>` : timeGrid(d.days, today, week)}</div>
-    <div class="phone-only">${chips}<div style="margin-top:12px">${dayList}</div></div></div>`;
+    <div class="phone-only">${chips}<div style="margin-top:12px">${dayList}</div></div>${blockPanel}</div>`;
 }
 
 /* ---------- router ---------- */
@@ -3203,5 +3216,18 @@ Object.assign(STRAT_ACTS, {
     } catch (e) {
       modal("Checking prices", notConnected("Max", e.message), `<button type="button" class="btn ghost" data-act="close">Close</button>`);
     }
+  },
+});
+
+/* The Planner's own blocks: added and removed here, never sent to Google Calendar or Max. */
+Object.assign(STRAT_ACTS, {
+  blockAdd: async (date) => {
+    const title = pantryVal("bk-title").trim();
+    if (!title) return toast("Name the block first.");
+    await api("/api/planner/blocks/add", { body: { title, date, start: pantryVal("bk-start"), end: pantryVal("bk-end") } });
+    toast("Block added."); render();
+  },
+  blockRemove: async (id) => {
+    await api("/api/planner/blocks/remove", { body: { id } }); render();
   },
 });

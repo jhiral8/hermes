@@ -44,6 +44,7 @@ from prices import Prices
 import demo_health
 from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
+from planner_blocks import PlannerBlocks
 from max_library import LibraryError, MaxLibrary, SampleLibrary
 import foods as food_lookup
 import meal_estimate
@@ -362,7 +363,16 @@ def make_prices(cfg, app):
     return Prices(path)
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None, pantry=None, prices=None):
+def make_planner_blocks(cfg, app):
+    """The Planner's own blocks (in memory in sample-data mode)."""
+    if app.demo:
+        return PlannerBlocks(None)
+    near = (cfg.get("foods") or {}).get("store_path") or cfg.get("audit_log")
+    path = str(Path(near).with_name("planner-blocks.json")) if near else None
+    return PlannerBlocks(path)
+
+
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None, pantry=None, prices=None, blocks=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -391,6 +401,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         pantry = make_pantry(cfg, app)
     if prices is None:
         prices = make_prices(cfg, app)
+    if blocks is None:
+        blocks = make_planner_blocks(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -461,6 +473,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._inbox_get(path[len("/api/inbox"):].strip("/"))
             elif path == "/api/planner":
                 self._planner_get()
+            elif path == "/api/planner/blocks":
+                self._planner_blocks_get()
             elif path == "/api/library" or path.startswith("/api/library/skill/"):
                 self._library_get(urllib.parse.unquote(path[len("/api/library/skill/"):]) if "/skill/" in path else None)
             elif path in ("/api/health/foods", "/api/health/food-search") or path.startswith("/api/health/barcode/"):
@@ -526,6 +540,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     result = self._health_log(user, parts[3], body)
                 elif parts[:3] == ["api", "health", "pantry"] and len(parts) == 4:
                     result = self._pantry_post(user, parts[3], body)
+                elif parts[:3] == ["api", "planner", "blocks"] and len(parts) == 4:
+                    result = self._planner_block_post(user, parts[3], body)
                 elif parts[:3] == ["api", "health", "prices"] and len(parts) == 4:
                     result = self._prices_post(user, parts[3], body)
                 else:
@@ -598,6 +614,31 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 return
             # Mail is never written to disk or cached; the browser keeps it in memory.
             self._json(200, {"ok": True, **out, **app.meta()})
+
+        def _planner_blocks_get(self):
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                out = {"blocks": blocks.week((q.get("start") or [""])[0], (q.get("days") or [7])[0])}
+            except (ValueError, TypeError):
+                self._json(400, {"ok": False, "error": "Give the first day as start=YYYY-MM-DD."})
+                return
+            except SourceError as e:
+                self._json(503, {"ok": False, "error": str(e), **app.meta()})
+                return
+            self._json(200, {"ok": True, **out, **app.meta()})
+
+        def _planner_block_post(self, user, kind, body):
+            fn = {"add": blocks.add, "remove": blocks.remove}.get(kind)
+            if fn is None:
+                return None
+            try:
+                out = fn(body)
+            except ValueError as e:
+                raise ActionError(400, str(e))
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            app.audit(user, "planner_block_" + kind, {})
+            return {"ok": True, **out, **app.meta()}
 
         def _planner_get(self):
             if planner is None:
