@@ -612,7 +612,7 @@ async function screenSystem(tab) {
 
 function screenMore() {
   const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"], ["inbox", "inbox", "Inbox", "Your mail, read-only"], ["planner", "planner", "Planner", "Your calendar, read-only"], ["library", "library", "Library", "Files, notes, memory and skills"]];
-  return `<div class="ph"><div class="ph-t"><h1>More</h1></div></div><section class="panel"><div class="list">${items.map(([h, i, t, s]) => `<a class="li" href="#${h}"><span class="main"><span class="t">${ic(i, 16)} ${t}</span><span class="s">${s}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div></section>`;
+  return `<div class="ph"><div class="ph-t"><h1>More</h1></div></div><section class="panel"><h2 class="sec">Lock</h2><p class="small muted">Hides the app until you enter your PIN. Tailscale still keeps strangers out.</p><div class="ph-a" style="margin:8px 0 16px"><button type="button" class="btn primary" data-act="lockNow">Lock now</button><button type="button" class="btn ghost" data-act="pinOpen">Set or change PIN</button></div></section><section class="panel"><div class="list">${items.map(([h, i, t, s]) => `<a class="li" href="#${h}"><span class="main"><span class="t">${ic(i, 16)} ${t}</span><span class="s">${s}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div></section>`;
 }
 
 function screenSoon(what) {
@@ -2945,6 +2945,8 @@ async function screenPlanner(rest) {
 
 let renderSeq = 0;
 async function render() {
+  paintLock();
+  if (isLocked()) return; // nothing is loaded behind the lock screen
   const route = (location.hash || "#today").slice(1) || "today";
   const [area, ...rest] = route.split("/");
   const seq = ++renderSeq;
@@ -3253,5 +3255,56 @@ Object.assign(STRAT_ACTS, {
       if (S.chat) S.chat.scope = sources;
     }
     closeModal(); toast("Saved."); render();
+  },
+});
+
+/* Lock: Lock hides the app behind a PIN kept on the server. The lock is remembered in this browser, so opening the app again still asks. */
+const LOCK_KEY = "hermes-locked";
+const isLocked = () => { try { return localStorage.getItem(LOCK_KEY) === "1"; } catch (_) { return false; } };
+const setLocked = (on) => { try { if (on) localStorage.setItem(LOCK_KEY, "1"); else localStorage.removeItem(LOCK_KEY); } catch (_) { /* no storage: the lock lasts this visit */ } };
+function paintLock() {
+  let el = document.getElementById("lock-screen");
+  if (!isLocked()) { if (el) el.remove(); return; }
+  if (el) return;
+  el = document.createElement("div");
+  el.id = "lock-screen";
+  el.className = "lock-screen";
+  el.innerHTML = `<div class="lock-card"><div class="lock-mark">${logoMark(40)}</div><h1>Hermes is locked</h1><p class="small muted" id="lock-msg">Enter your PIN to open it.</p><input id="lock-pin" class="inp" type="password" inputmode="numeric" autocomplete="off" maxlength="8" aria-label="PIN"><button type="button" class="btn primary" data-act="unlock">Unlock</button></div>`;
+  document.body.appendChild(el);
+  setTimeout(() => { const b = document.getElementById("lock-pin"); if (b) b.focus(); }, 50);
+}
+const openPinSetup = (thenLock, isSet) => modal(isSet ? "Change PIN" : "Set a PIN",
+  `<p class="small muted">4 to 8 digits. It's kept on your server, not in the app.</p>${isSet ? `<p class="small"><label for="pin-cur">Current PIN</label></p><input id="pin-cur" class="inp" type="password" inputmode="numeric" maxlength="8">` : ""}<p class="small" style="margin-top:12px"><label for="pin-new">New PIN</label></p><input id="pin-new" class="inp" type="password" inputmode="numeric" maxlength="8"><p class="small" style="margin-top:12px"><label for="pin-again">Type it again</label></p><input id="pin-again" class="inp" type="password" inputmode="numeric" maxlength="8">`,
+  `<button type="button" class="btn ghost" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="pinSave" data-arg="${thenLock ? 1 : 0}">Save</button>`);
+Object.assign(STRAT_ACTS, {
+  lockNow: async () => {
+    const st = await api("/api/lock");
+    if (!st.set) return openPinSetup(true, false);
+    setLocked(true); render();
+  },
+  pinOpen: async () => {
+    const st = await api("/api/lock");
+    openPinSetup(false, st.set);
+  },
+  pinSave: async (arg) => {
+    const pin = pantryVal("pin-new").trim(), again = pantryVal("pin-again").trim(), current = pantryVal("pin-cur").trim();
+    if (pin !== again) return toast("The two PINs don't match.");
+    try {
+      await api("/api/lock/set", { body: { pin, current } });
+    } catch (e) {
+      return toast(e.message);
+    }
+    closeModal();
+    if (arg === "1") setLocked(true);
+    toast("PIN saved.");
+    render();
+  },
+  unlock: async () => {
+    const msg = document.getElementById("lock-msg");
+    const input = document.getElementById("lock-pin");
+    const r = await api("/api/lock/check", { body: { pin: pantryVal("lock-pin").trim() } }).catch((e) => ({ ok: false, error: e.message }));
+    if (r.ok) { setLocked(false); if (input) input.value = ""; render(); return; }
+    if (input) input.value = "";
+    if (msg) msg.textContent = r.wait ? `Too many tries. Wait ${r.wait} seconds.` : (r.error || "That's not the PIN.");
   },
 });
