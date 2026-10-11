@@ -46,6 +46,7 @@ from inbox import Gmail, SampleMail
 from planner import Calendar, SampleCalendar
 from planner_blocks import PlannerBlocks
 from lock import Lock
+from rooms import Rooms
 from max_library import LibraryError, MaxLibrary, SampleLibrary
 import foods as food_lookup
 import meal_estimate
@@ -382,7 +383,17 @@ def make_lock(cfg, app):
     return Lock(path)
 
 
-def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None, pantry=None, prices=None, blocks=None, lock=None):
+def make_rooms(cfg, app):
+    """Rooms: a sample debate in sample-data mode, CrewAI on the server once it's installed."""
+    if app.demo:
+        from rooms import SampleDebate
+        return Rooms(None, backend=SampleDebate())
+    near = (cfg.get("foods") or {}).get("store_path") or cfg.get("audit_log")
+    path = str(Path(near).with_name("rooms.json")) if near else None
+    return Rooms(path)
+
+
+def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, health=None, inbox=None, foods=None, planner=None, library=None, strategy=None, mealplan=None, pantry=None, prices=None, blocks=None, lock=None, rooms=None):
     allowed = {x.lower() for x in cfg["allowed_logins"]}
     web_root = Path(web_root).resolve()
     if app is None:
@@ -415,6 +426,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
         blocks = make_planner_blocks(cfg, app)
     if lock is None:
         lock = make_lock(cfg, app)
+    if rooms is None:
+        rooms = make_rooms(cfg, app)
 
     get_routes = {
         "/api/today": app.today,
@@ -489,6 +502,10 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._planner_blocks_get()
             elif path == "/api/lock":
                 self._json(200, {"ok": True, **lock.status(), **app.meta()})
+            elif path == "/api/rooms":
+                self._json(200, {"ok": True, **rooms.list(), **app.meta()})
+            elif path.startswith("/api/rooms/") and path.count("/") == 3:
+                self._rooms_get(path.split("/")[3])
             elif path == "/api/library" or path.startswith("/api/library/skill/"):
                 self._library_get(urllib.parse.unquote(path[len("/api/library/skill/"):]) if "/skill/" in path else None)
             elif path in ("/api/health/foods", "/api/health/food-search") or path.startswith("/api/health/barcode/"):
@@ -560,6 +577,8 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                     result = self._prices_post(user, parts[3], body)
                 elif parts[:2] == ["api", "lock"] and len(parts) == 3 and parts[2] in ("set", "check"):
                     result = self._lock_post(user, parts[2], body)
+                elif parts[:2] == ["api", "rooms"] and (len(parts) == 3 and parts[2] == "create" or len(parts) == 4 and parts[3] in ("run", "steer", "stop")):
+                    result = self._rooms_post(user, parts[2:], body)
                 else:
                     result = self._dispatch(user, parts, body)
             except (ActionError, ChatError) as e:
@@ -642,6 +661,32 @@ def make_handler(cfg, web_root, cache, app=None, chat=None, artifacts=None, heal
                 self._json(503, {"ok": False, "error": str(e), **app.meta()})
                 return
             self._json(200, {"ok": True, **out, **app.meta()})
+
+        def _rooms_get(self, rid):
+            try:
+                self._json(200, {"ok": True, "room": rooms.get(rid), **app.meta()})
+            except ValueError as e:
+                self._json(404, {"ok": False, "error": str(e), **app.meta()})
+
+        def _rooms_post(self, user, p, body):
+            try:
+                if p == ["create"]:
+                    out = rooms.create(body)
+                    app.audit(user, "room_create", {})
+                elif p[1] == "run":
+                    out = {"room": rooms.run(p[0])}
+                    app.audit(user, "room_run", {})
+                elif p[1] == "steer":
+                    out = rooms.steer(p[0], body)
+                    app.audit(user, "room_steer", {})
+                else:
+                    out = rooms.stop(p[0])
+                    app.audit(user, "room_stop", {})
+            except ValueError as e:
+                raise ActionError(400, str(e))
+            except SourceError as e:
+                raise ActionError(503, str(e))
+            return {"ok": True, **out, **app.meta()}
 
         def _lock_post(self, user, kind, body):
             try:

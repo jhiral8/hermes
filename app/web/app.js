@@ -139,7 +139,7 @@ function renderShell(route) {
     }).join("")}</nav>
     <div class="side-foot"><button type="button" class="acct" data-act="acctMenu" aria-haspopup="menu"><span class="avatar">${esc(initials(me.name || "Craig"))}</span><span class="who"><b style="display:block;font-size:13.5px;font-weight:600">${esc((me.name || "Craig").split(" ")[0])}</b><span class="xs muted">Owner · ${esc(me.login || "signed in through Tailscale")}</span></span></button></div>`;
 
-  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", planner: "Planner", library: "Library", more: "More", soon: "Coming next" }[area] || "Hermes";
+  const title = { today: "Today", max: "Max", work: "Work", agents: "Agents", routines: "Routines", approvals: "Approvals", system: "System", health: "Health", inbox: "Inbox", planner: "Planner", library: "Library", rooms: "Rooms", more: "More", soon: "Coming next" }[area] || "Hermes";
   $("#top").innerHTML = `
     <a href="#today" class="phone-only" aria-label="Hermes home" style="display:flex">${logoMark(26)}</a>
     <div class="crumb"><span class="cur">${esc(title)}</span></div>
@@ -613,7 +613,7 @@ async function screenSystem(tab) {
 }
 
 function screenMore() {
-  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"], ["inbox", "inbox", "Inbox", "Your mail, read-only"], ["planner", "planner", "Planner", "Your calendar, read-only"], ["library", "library", "Library", "Files, notes, memory and skills"]];
+  const items = [["max", "max", "Max", "Chat with Max"], ["agents", "agents", "Agents", "Who does what and what it costs"], ["routines", "routines", "Routines", "Recurring agent work"], ["system/status", "system", "System", "Services, spending and the stop button"], ["health/food", "health", "Health", "Food, training, meals and progress"], ["inbox", "inbox", "Inbox", "Your mail, read-only"], ["planner", "planner", "Planner", "Your calendar, read-only"], ["library", "library", "Library", "Files, notes, memory and skills"], ["rooms", "agents", "Rooms", "Agents debate a question"]];
   return `<div class="ph"><div class="ph-t"><h1>More</h1></div></div><section class="panel"><h2 class="sec">Lock</h2><p class="small muted">Hides the app until you enter your PIN. Tailscale still keeps strangers out.</p><div class="ph-a" style="margin:8px 0 16px"><button type="button" class="btn primary" data-act="lockNow">Lock now</button><button type="button" class="btn ghost" data-act="pinOpen">Set or change PIN</button></div></section><section class="panel"><div class="list">${items.map(([h, i, t, s]) => `<a class="li" href="#${h}"><span class="main"><span class="t">${ic(i, 16)} ${t}</span><span class="s">${s}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("")}</div></section>`;
 }
 
@@ -2968,6 +2968,7 @@ async function render() {
   else if (area === "inbox") html = await screenInbox(rest);
   else if (area === "planner") html = await screenPlanner(rest);
   else if (area === "library") html = await screenLibrary(rest);
+  else if (area === "rooms") html = await screenRooms(rest);
   else html = await screenToday();
   if (seq !== renderSeq) return; // a newer render started
   if (!S.cache.approvals && area !== "approvals") load("approvals", "/api/approvals").then(() => renderShell(route));
@@ -3353,3 +3354,71 @@ Object.assign(STRAT_ACTS, {
     saveWatch({ ...f, slots }); render();
   },
 });
+
+/* ---------- Rooms: a few agent personas debate a question, then the Chair writes one recommendation ---------- */
+const ROOM_STATUS = { ready: "Not started", steer: "Round 1 done, waiting for your steer", done: "Finished", stopped: "Stopped", capped: "Stopped at the cost cap" };
+const pence = (p) => `£${(p / 100).toFixed(2)}`;
+async function screenRooms(rest) {
+  if (rest[0]) return screenRoom(rest[0]);
+  const d = await api("/api/rooms").catch((e) => ({ error: e.message }));
+  if (d.error) return `<div class="ph"><div class="ph-t"><h1>Rooms</h1></div></div>${notConnected("Rooms", d.error)}`;
+  const form = S.roomForm || { template: "food", seats: [] };
+  const seatsNow = form.template ? (d.templates.find((t) => t.key === form.template) || { seats: [] }).seats : form.seats;
+  const list = d.rooms.map((r) => `<a class="li" href="#rooms/${esc(r.id)}"><span class="main"><span class="t">${esc(r.question)}</span><span class="s">${esc(ROOM_STATUS[r.status] || r.status)} · ${pence(r.spent_p)} of ${pence(d.cap_p)}</span></span><span class="end">${ic("chev", 16)}</span></a>`).join("");
+  return `<div class="ph"><div class="ph-t"><h1>Rooms</h1><p class="sub">Agents debate a question from different seats. The Chair writes one recommendation and keeps disagreements visible.</p></div></div>
+    ${d.sample ? `<p class="xs muted">Sample debate: the real one needs CrewAI on the server, which isn't installed yet.</p>` : ""}
+    <div class="cols even"><section class="panel"><h2 style="margin-bottom:10px">New room</h2>
+      <label class="small" for="rm-q">Question</label><textarea id="rm-q" class="inp" rows="3" maxlength="300" placeholder="What should I eat on Tuesday?"></textarea>
+      <p class="small" style="margin:12px 0 6px">Template</p>
+      <div class="btns">${d.templates.map((t) => `<button type="button" class="btn sm${form.template === t.key ? " primary" : " ghost"}" data-act="roomTemplate" data-arg="${t.key}" aria-pressed="${form.template === t.key}">${esc(t.name)}</button>`).join("")}</div>
+      <p class="small" style="margin:12px 0 6px">Seats (2 to 4)</p>
+      <div class="btns">${d.seats.map((s) => `<button type="button" class="btn sm${seatsNow.includes(s.key) ? " primary" : " ghost"}" data-act="roomSeat" data-arg="${s.key}" aria-pressed="${seatsNow.includes(s.key)}" title="${esc(s.role)}">${esc(s.name)}</button>`).join("")}</div>
+      <p class="xs muted" style="margin-top:10px">Each room stops at ${pence(d.cap_p)}. Public sources only.</p>
+      <div class="btns" style="margin-top:12px"><button type="button" class="btn primary" data-act="roomCreate">Start room</button></div></section>
+      <section class="panel"><h2 style="margin-bottom:6px">Rooms</h2><div class="list">${list || `<p class="small muted">No rooms yet.</p>`}</div></section></div>`;
+}
+async function screenRoom(rid) {
+  const d = await api(`/api/rooms/${encodeURIComponent(rid)}`).catch((e) => ({ error: e.message }));
+  if (d.error) return `<div class="ph"><div class="ph-t"><h1>Room</h1></div></div>${notConnected("Rooms", d.error)}`;
+  const r = d.room;
+  const open = r.status === "ready" || r.status === "steer";
+  const steps = r.transcript.map((t) => `<div class="li"><span class="main"><span class="t">${esc(t.name)}${t.round ? ` · round ${t.round}` : ""}</span><span class="s" style="white-space:pre-wrap">${esc(t.text)}</span></span></div>`).join("");
+  const next = r.status === "ready" ? `<button type="button" class="btn primary" data-act="roomRun" data-arg="${esc(r.id)}">Start round 1</button>`
+    : r.status === "steer" ? `<label class="small" for="rm-steer">Your steer (optional)</label><textarea id="rm-steer" class="inp" rows="2" maxlength="500" placeholder="For example: keep it under an hour"></textarea><div class="btns" style="margin-top:10px"><button type="button" class="btn ghost" data-act="roomSteer" data-arg="${esc(r.id)}">Send steer</button><button type="button" class="btn primary" data-act="roomRun" data-arg="${esc(r.id)}">Run round 2 and the Chair</button></div>`
+    : "";
+  return `<div class="ph"><div class="ph-t"><h1>Room</h1><p class="sub">${esc(r.question)}</p></div><div class="ph-a"><a class="btn ghost sm" href="#rooms">All rooms</a></div></div>
+    <section class="panel"><div class="panel-h"><div><h2>${esc(ROOM_STATUS[r.status] || r.status)}</h2><p class="small muted">Seats: ${r.seats.map((k) => esc(({ planner: "Planner", sceptic: "Sceptic", cook: "Cook", coach: "Coach" })[k] || k)).join(", ")} · ${pence(r.spent_p)} of ${pence(d.cap_p || 150)} used</p></div>
+      ${open ? `<button type="button" class="btn sm" data-act="roomStop" data-arg="${esc(r.id)}">Stop room</button>` : ""}</div>
+      ${next ? `<div style="margin-top:12px">${next}</div>` : ""}</section>
+    <section class="panel" style="margin-top:14px"><h2 style="margin-bottom:6px">Debate</h2><div class="list">${steps || `<p class="small muted">Nothing said yet.</p>`}</div></section>
+    ${r.result ? `<section class="panel" style="margin-top:14px"><h2 style="margin-bottom:6px">Recommendation</h2><p class="small" style="white-space:pre-wrap">${esc(r.result)}</p><p class="xs muted" style="margin-top:8px">Saving to Library and salt.md comes next.</p></section>` : ""}`;
+}
+Object.assign(STRAT_ACTS, {
+  roomTemplate: (k) => { S.roomForm = { template: k, seats: [] }; render(); },
+  roomSeat: (k) => {
+    const f = S.roomForm || { template: "food", seats: [] };
+    const base = f.template ? [...(TEMPLATES_SEATS[f.template] || [])] : [...f.seats];
+    const seats = base.includes(k) ? base.filter((x) => x !== k) : [...base, k];
+    if (seats.length > 4) return toast("Four seats at most.");
+    S.roomForm = { template: "", seats };
+    render();
+  },
+  roomCreate: async () => {
+    const question = pantryVal("rm-q").trim();
+    if (!question) return toast("Ask the room a question first.");
+    const f = S.roomForm || { template: "food", seats: [] };
+    const body = f.template ? { question, template: f.template } : { question, seats: f.seats };
+    const made = await api("/api/rooms/create", { body }).catch((e) => { toast(e.message); return null; });
+    if (!made) return;
+    S.roomForm = null;
+    location.hash = `#rooms/${made.id}`;
+  },
+  roomRun: async (rid) => { await api(`/api/rooms/${encodeURIComponent(rid)}/run`, { body: {} }).catch((e) => toast(e.message)); render(); },
+  roomSteer: async (rid) => {
+    const text = pantryVal("rm-steer").trim();
+    if (!text) return toast("Type your steer first.");
+    await api(`/api/rooms/${encodeURIComponent(rid)}/steer`, { body: { text } }).catch((e) => toast(e.message)); render();
+  },
+  roomStop: async (rid) => { await api(`/api/rooms/${encodeURIComponent(rid)}/stop`, { body: {} }).catch((e) => toast(e.message)); render(); },
+});
+const TEMPLATES_SEATS = { food: ["cook", "coach", "sceptic"], week: ["planner", "coach", "sceptic", "cook"] };

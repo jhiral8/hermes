@@ -1149,3 +1149,6 @@ main:has(.mc-app){padding:0;max-width:none}
 .wsc-h{font-weight:600}
 .wsc-row{display:flex;justify-content:space-between;gap:8px;font-size:13px}
 .wsc-stop{font:inherit;font-size:13px;padding:8px;border-radius:var(--r);border:1px solid var(--line);background:var(--surface);color:inherit;opacity:.7}
+
+/* Rooms */
+.li .s{white-space:normal}
