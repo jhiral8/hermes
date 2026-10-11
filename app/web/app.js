@@ -527,7 +527,7 @@ function approvalDetail(a) {
     </dl></section></div>`;
 }
 
-const SYS_TABS = [["status", "Status"], ["connections", "Connections"], ["access", "Access"], ["spending", "Spending"], ["controls", "Controls"], ["credits", "Credits"]];
+const SYS_TABS = [["status", "Status"], ["connections", "Connections"], ["access", "Access"], ["spending", "Spending"], ["controls", "Controls"], ["watch", "Watch"], ["credits", "Credits"]];
 const CONN_STATE = { on: ["ok", "Connected"], demo: ["ok", "Sample data"], key_missing: ["warn", "Set up · file missing"], off: ["", "Not connected"] };
 const CREDITS = [
   ["Hermes Agent", "https://github.com/NousResearch/hermes-agent", "Max, on Signal and in this app", ""],
@@ -575,6 +575,8 @@ async function screenSystem(tab) {
         <p class="xs muted" style="margin-top:10px">Only your Tailscale login can open this app.</p></section>
       <section class="panel"><h2 style="margin-bottom:10px">Agent access</h2>${["max", "codex", "claude"].map((k) => `<h3 class="small" style="margin:10px 0 6px;font-weight:600">${k[0].toUpperCase() + k.slice(1)}</h3><div class="allow">${AGENT_ACCESS[k].map(([ok, t]) => row(ok, t)).join("")}</div>`).join("")}
         <p class="xs muted" style="margin-top:12px">Set on the server. An agent can't grant itself or others access, and a remembered preference isn't a permission. Giving an agent your private data needs your own yes first.</p></section></div>`;
+  } else if (tab === "watch") {
+    body = watchTab();
   } else if (tab === "credits") {
     body = `<section class="panel"><h2 style="margin-bottom:10px">Software and data</h2><div class="tbl-wrap"><table class="tbl tbl-cards"><thead><tr><th>Component</th><th>Used for</th><th>Licence</th></tr></thead><tbody>${CREDITS.map(([n, u, w, l]) => `<tr><td data-l="Component"><a class="link" href="${esc(u)}" target="_blank" rel="noopener">${esc(n)}</a></td><td data-l="Used for">${esc(w)}</td><td data-l="Licence">${esc(l || "See project")}</td></tr>`).join("")}</tbody></table></div></section>`;
   } else if (tab === "spending") {
@@ -3306,5 +3308,48 @@ Object.assign(STRAT_ACTS, {
     if (r.ok) { setLocked(false); if (input) input.value = ""; render(); return; }
     if (input) input.value = "";
     if (msg) msg.textContent = r.wait ? `Too many tries. Wait ${r.wait} seconds.` : (r.error || "That's not the PIN.");
+  },
+});
+
+/* System > Watch: a preview only. Faces and screens are shown with sample numbers until the Wear OS app exists. */
+const WATCH_STYLES = [["minimal", "Minimal"], ["ring", "Ring"], ["list", "List"]];
+const WATCH_SLOTS = [["kcal_left", "Calories left today", "1,240"], ["protein", "Protein today", "96 g"], ["week_left", "Calories left this week", "8,300"], ["weight", "Weight trend", "−0.4 kg a week"], ["next", "Next event", "Gym 07:00"]];
+const WATCH_KEY = "hermes-watch-face";
+const WATCH_SCREENS = [
+  ["Log food", `<div class="wsc-h">Log food</div><div class="wsc-row"><span>Usual breakfast</span><b>349 kcal</b></div><div class="wsc-row"><span>Water</span><b>+250 ml</b></div>`],
+  ["Ticking sets", `<div class="wsc-h">Bench press</div><div class="wsc-row"><span>Set 2 · 60 kg × 8</span><span class="wsc-done">Done</span></div><div class="wsc-row"><span>Rest</span><b>1:30</b></div>`],
+  ["Stop", `<div class="wsc-h">Stop</div><button type="button" class="wsc-stop" disabled>Block all agent work</button><p class="xs muted">Works from the phone only.</p>`],
+  ["Waiting to sync", `<div class="wsc-h">Waiting to sync</div><div class="wsc-row"><span>Lunch, logged 12:40</span><b>2</b></div><p class="xs muted">Sent when the phone is back in range.</p>`],
+];
+function watchFace() {
+  try {
+    const v = JSON.parse(localStorage.getItem(WATCH_KEY) || "null");
+    if (v && WATCH_STYLES.some(([k]) => k === v.style) && Array.isArray(v.slots)) {
+      return { style: v.style, slots: v.slots.filter((x) => WATCH_SLOTS.some(([k]) => k === x)).slice(0, 4) };
+    }
+  } catch (_) { /* unreadable: the default face */ }
+  return { style: "minimal", slots: ["kcal_left", "protein", "next"] };
+}
+const saveWatch = (face) => { try { localStorage.setItem(WATCH_KEY, JSON.stringify(face)); } catch (_) { /* not kept: the preview still works this visit */ } };
+function watchFacePreview(face) {
+  const picked = WATCH_SLOTS.filter(([k]) => face.slots.includes(k));
+  return `<div class="wf wf-${face.style}" role="img" aria-label="Watch face preview"><div class="wf-time">08:12</div>${picked.map(([, t, v]) => `<div class="wf-slot"><span>${esc(t)}</span><b>${esc(v)}</b></div>`).join("") || `<div class="wf-slot"><span>Pick up to four things</span></div>`}</div>`;
+}
+function watchTab() {
+  const face = watchFace();
+  return `<div class="cols even"><section class="panel"><h2 style="margin-bottom:6px">Watch face</h2><p class="small muted">Pick a style and up to four things to show. Kept in this browser for now.</p>
+    <div class="btns" style="margin:10px 0">${WATCH_STYLES.map(([k, t]) => `<button type="button" class="btn sm${face.style === k ? " primary" : " ghost"}" data-act="watchStyle" data-arg="${k}" aria-pressed="${face.style === k}">${t}</button>`).join("")}</div>
+    <div class="btns" style="margin-bottom:12px">${WATCH_SLOTS.map(([k, t]) => `<button type="button" class="btn sm${face.slots.includes(k) ? " primary" : " ghost"}" data-act="watchSlot" data-arg="${k}" aria-pressed="${face.slots.includes(k)}">${esc(t)}</button>`).join("")}</div>
+    ${watchFacePreview(face)}</section>
+    <section class="panel"><h2 style="margin-bottom:6px">Screens</h2><p class="small muted">What the watch shows, with sample numbers.</p><div class="wsc-grid">${WATCH_SCREENS.map(([t, html]) => `<div class="wsc"><div class="wsc-t">${t}</div>${html}</div>`).join("")}</div></section></div>
+    <p class="xs muted" style="margin-top:12px">A preview only. The real watch screens come with the Wear OS app, after Android.</p>`;
+}
+Object.assign(STRAT_ACTS, {
+  watchStyle: (k) => { saveWatch({ ...watchFace(), style: k }); render(); },
+  watchSlot: (k) => {
+    const f = watchFace();
+    const slots = f.slots.includes(k) ? f.slots.filter((x) => x !== k) : [...f.slots, k];
+    if (slots.length > 4) return toast("Four things at most.");
+    saveWatch({ ...f, slots }); render();
   },
 });
