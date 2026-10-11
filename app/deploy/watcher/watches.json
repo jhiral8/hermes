@@ -1,0 +1,5 @@
+[
+  {"url": "https://github.com/NousResearch/hermes-agent/releases.atom", "title": "Hermes Agent releases", "check_hours": 6, "tag": "security-watch"},
+  {"url": "https://github.com/paperclipai/paperclip/releases.atom", "title": "Paperclip releases", "check_hours": 12, "tag": "security-watch"},
+  {"url": "https://github.com/saltmd/salt.md/releases.atom", "title": "salt.md releases", "check_hours": 12, "tag": "security-watch"}
+]

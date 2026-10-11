@@ -1,0 +1,11 @@
+# Watches for the Hermes app's stop request and runs the kill switch.
+# The app can only drop the request file; this root-owned unit does the stopping.
+[Unit]
+Description=Hermes app stop request watcher
+
+[Path]
+PathExists=/var/lib/hermes-app/stop-request
+Unit=hermes-app-stop.service
+
+[Install]
+WantedBy=multi-user.target

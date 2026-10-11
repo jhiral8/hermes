@@ -1,0 +1,32 @@
+# Copies the broker's request list (subject, recipients, status, times only)
+# into a feed file the Hermes app can read. Runs as the broker user so the app
+# never gets access to the broker's database.
+[Unit]
+Description=Hermes app: broker request feed
+
+[Service]
+Type=oneshot
+User=broker
+Group=hermes-app
+UMask=0027
+ExecStart=/usr/bin/python3 /opt/hermes-app/app/server/broker_export.py --config /etc/hermes-app/broker-export.json
+StateDirectory=hermes-app-feed
+StateDirectoryMode=0750
+# The connection is read-only; SQLite still needs the folder writable for its
+# shared-memory file when the broker uses WAL mode.
+ReadWritePaths=/var/lib/hermes-broker
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native

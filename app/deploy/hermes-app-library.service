@@ -1,0 +1,30 @@
+# Copies Max's memory entries and skills' SKILL.md files into a feed file the
+# Hermes app can read, for its Library. Runs as the hermes user so the app
+# never gets access to Max's home folder (keys, sessions). Read-only there.
+[Unit]
+Description=Hermes app: Max's memory and skills feed
+ConditionPathExists=!/etc/hermes-paused
+
+[Service]
+Type=oneshot
+User=hermes
+Group=hermes-app
+UMask=0027
+ExecStart=/usr/bin/python3 /opt/hermes-app/app/server/max_library.py --home /home/hermes/.hermes --out /var/lib/hermes-app-library/library.json
+StateDirectory=hermes-app-library
+StateDirectoryMode=0750
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native

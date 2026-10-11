@@ -1,0 +1,37 @@
+# Run as the `watch` user with rootless Docker, from /srv/watch.
+# CD_VERSION comes from .env: newest changedetection.io release at least two weeks old.
+services:
+  proxy:
+    image: ubuntu/squid:6.6-24.04_edge
+    container_name: watch-proxy
+    restart: unless-stopped
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+      - ./allowed-hosts.txt:/etc/squid/allowed-hosts.txt:ro
+    ports:
+      - "127.0.0.1:5000:3129"   # UI/API reaches changedetection through squid (internal network can't publish ports)
+    networks: [inside, outside]
+
+  changedetection:
+    image: ghcr.io/dgtlmoon/changedetection.io:${CD_VERSION:?set CD_VERSION in .env}
+    container_name: watch-cd
+    restart: unless-stopped
+    environment:
+      - HTTP_PROXY=http://proxy:3128
+      - HTTPS_PROXY=http://proxy:3128
+      - NO_PROXY=127.0.0.1,localhost
+      - FETCH_WORKERS=1
+      - MINIMUM_SECONDS_RECHECK_TIME=1800
+      - HIDE_REFERER=true
+      - TZ=Europe/London
+    volumes:
+      - ./datastore:/datastore
+    depends_on: [proxy]
+    networks: [inside]
+    mem_limit: 512m
+    cpus: 0.5
+
+networks:
+  inside:
+    internal: true   # no route out except through the proxy
+  outside: {}

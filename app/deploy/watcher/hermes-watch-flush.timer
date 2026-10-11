@@ -1,0 +1,9 @@
+[Unit]
+Description=08:00 UK flush of queued page-watcher changes
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target

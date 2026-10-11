@@ -1,0 +1,10 @@
+# Runs the existing kill switch when the Hermes app asks for a stop.
+# Resuming is deliberately not offered here; it stays on Craig's Mac.
+[Unit]
+Description=Hermes app stop request (runs the kill switch)
+
+[Service]
+Type=oneshot
+# Remove the request first so a failed kill doesn't loop; the log keeps the record.
+ExecStartPre=/usr/bin/rm -f /var/lib/hermes-app/stop-request
+ExecStart=/usr/local/sbin/hermes-kill

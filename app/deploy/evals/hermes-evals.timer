@@ -1,0 +1,9 @@
+[Unit]
+Description=Monthly Hermes regression pack (1st of the month, 10:00 UK)
+
+[Timer]
+OnCalendar=*-*-01 10:00:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target

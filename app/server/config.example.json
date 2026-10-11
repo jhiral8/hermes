@@ -1,0 +1,147 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 3010,
+  "allowed_logins": [
+    "REPLACE-with-Craig's-Tailscale-login"
+  ],
+  "cache_seconds": 15,
+  "services": [
+    {
+      "id": "max",
+      "name": "Max (Hermes Agent)",
+      "group": "Agents",
+      "kind": "http",
+      "url": "http://127.0.0.1:8642/health"
+    },
+    {
+      "id": "paperclip",
+      "name": "Paperclip board",
+      "group": "Agents",
+      "kind": "http",
+      "url": "http://127.0.0.1:3100/"
+    },
+    {
+      "id": "broker",
+      "name": "Approval broker",
+      "group": "Safety",
+      "kind": "http",
+      "url": "http://127.0.0.1:787/"
+    },
+    {
+      "id": "kill",
+      "name": "Kill switch",
+      "group": "Safety",
+      "kind": "flag",
+      "path": "/etc/hermes-paused",
+      "on_text": "agents stopped",
+      "off_text": "not pulled",
+      "labels": {
+        "ok": "Off",
+        "down": "On"
+      }
+    },
+    {
+      "id": "nutritrace",
+      "name": "NutriTrace",
+      "group": "Health",
+      "kind": "http",
+      "url": "http://127.0.0.1:3001/"
+    },
+    {
+      "id": "lifttrace",
+      "name": "LiftTrace",
+      "group": "Health",
+      "kind": "http",
+      "url": "http://127.0.0.1:3002/"
+    },
+    {
+      "id": "cooktrace",
+      "name": "CookTrace",
+      "group": "Health",
+      "kind": "http",
+      "url": "http://127.0.0.1:3003/"
+    },
+    {
+      "id": "salt",
+      "name": "salt.md notes",
+      "group": "Notes",
+      "kind": "systemd",
+      "unit": "salt.service"
+    },
+    {
+      "id": "backup",
+      "name": "Nightly backup",
+      "group": "Safety",
+      "kind": "last_run",
+      "unit": "hermes-backup.service",
+      "max_age_hours": 26
+    }
+  ],
+  "audit_log": "/var/lib/hermes-app/actions.log",
+  "paperclip": {
+    "url": "http://127.0.0.1:3100",
+    "company_name": "Jhiral",
+    "key_file": "/etc/hermes-app/paperclip.key",
+    "web_url": "https://hermes-oracle.tail4abc29.ts.net:8444"
+  },
+  "broker": {
+    "feed_path": "/var/lib/hermes-app-feed/broker.json"
+  },
+  "cost_file": {
+    "csv_path": "/var/lib/hermes-cost/balance.csv",
+    "provider": "openrouter",
+    "month_cap_usd": 10,
+    "label": "Max on OpenRouter"
+  },
+  "stop": {
+    "request_file": "/var/lib/hermes-app/stop-request"
+  },
+  "max_chat": {
+    "url": "http://127.0.0.1:8642",
+    "key_file": "/etc/hermes-app/max-api.key",
+    "store_dir": "/var/lib/hermes-app/chat",
+    "kill_flag": "/etc/hermes-paused",
+    "artifacts_dir": "/var/lib/hermes-artifacts"
+  },
+  "health": {
+    "nutritrace": {
+      "url": "http://127.0.0.1:3001",
+      "key_file": "/etc/hermes-app/health/nutritrace.key",
+      "write_key_file": "/etc/hermes-app/health/nutritrace-write.key",
+      "web_url": "https://hermes-oracle.tail4abc29.ts.net:8443"
+    },
+    "lifttrace": {
+      "url": "http://127.0.0.1:3002",
+      "key_file": "/etc/hermes-app/health/lifttrace.key",
+      "write_key_file": "/etc/hermes-app/health/lifttrace-write.key",
+      "web_url": "https://hermes-oracle.tail4abc29.ts.net:9443"
+    },
+    "cooktrace": {
+      "url": "http://127.0.0.1:3003",
+      "key_file": "/etc/hermes-app/health/cooktrace.key",
+      "write_key_file": "/etc/hermes-app/health/cooktrace-write.key",
+      "web_url": "https://hermes-oracle.tail4abc29.ts.net:10000"
+    },
+    "estimator_file": "/var/lib/hermes-history/estimator.json",
+    "timezone": "Europe/London"
+  },
+  "inbox": {
+    "token_file": "/etc/hermes-app/inbox/gmail-real.token",
+    "timeout": 8
+  },
+  "planner": {
+    "token_file": "/etc/hermes-app/planner/calendar.token",
+    "calendars": ["primary"],
+    "timeout": 8
+  },
+  "foods": {
+    "off_enabled": false,
+    "timeout": 6,
+    "store_path": "/var/lib/hermes-app/saved-foods.json",
+    "usda_key_file": "/etc/hermes-app/usda.key"
+  },
+  "library": {
+    "feed": "/var/lib/hermes-app-library/library.json",
+    "notes_url": "https://notes.tail4abc29.ts.net"
+  }
+}

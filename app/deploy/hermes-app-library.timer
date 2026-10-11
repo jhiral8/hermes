@@ -1,0 +1,10 @@
+[Unit]
+Description=Hermes app: refresh Max's memory and skills feed every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
